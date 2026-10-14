@@ -48,6 +48,65 @@ def _mock_diagnosis(scenario: str, evidence: list[Evidence], mode: str) -> Diagn
         mode=mode,
     )
 
+def _confidence(value: object) -> float:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        number = 0.5
+    if number > 1:
+        number = number / 100
+    return max(0.0, min(1.0, number))
+
+def _finding_from_result(result: object) -> dict:
+    data = getattr(result, "pydantic", None)
+    if data is not None:
+        return data.model_dump() if hasattr(data, "model_dump") else dict(data)
+    data = getattr(result, "json_dict", None)
+    if isinstance(data, dict) and (data.get("root_causes") or data.get("summary")):
+        return data
+    raw = str(getattr(result, "raw", result)).strip()
+    raise ValueError(f"no structured diagnosis in crew output: {raw[:500]}")
+
+def _trace_from_result(result: object) -> list[dict]:
+    trace = []
+    for item in getattr(result, "tasks_output", []) or []:
+        agent = getattr(item, "agent", "") or "crew-task"
+        text = getattr(item, "summary", None) or getattr(item, "raw", "")
+        trace.append({"agent": str(agent), "status": "completed", "summary": str(text)[:500]})
+    return trace or [{"crew": "Chief DBA + CPU/Workload + Memory/Database", "status": "completed"}]
+
+def _report_from_crew(scenario: str, evidence: list[Evidence], finding: dict, trace: list[dict] | None = None) -> DiagnosisReport:
+    causes = finding.get("root_causes") or []
+    actions = finding.get("recommendations") or []
+    if not causes or not actions or not str(finding.get("summary") or "").strip():
+        raise ValueError("crew finding is missing root causes, recommendations, or summary")
+    collected = [e.source for e in evidence[:3]] or ["scenario definition"]
+    return DiagnosisReport(
+        incident_id=str(uuid.uuid4()),
+        scenario=scenario,
+        status="completed",
+        root_causes=[
+            RootCause(
+                name=str(item.get("name") or "unspecified"),
+                confidence=_confidence(item.get("confidence")),
+                evidence=list(item.get("evidence") or collected),
+            )
+            for item in causes
+        ],
+        evidence=evidence,
+        recommendations=[
+            Recommendation(
+                action=str(item.get("action") or "Review the evidence"),
+                rationale=str(item.get("rationale") or ""),
+                requires_approval=True,
+            )
+            for item in actions
+        ],
+        agent_trace=trace or [],
+        summary=str(finding["summary"]).strip(),
+        mode="crewai",
+    )
+
 def diagnose(scenario: str, user_context: str = "", prepare: bool = False) -> DiagnosisReport:
     settings = get_settings()
     retrieved = retrieve(SCENARIO_QUERIES.get(scenario, scenario))
@@ -66,12 +125,13 @@ def diagnose(scenario: str, user_context: str = "", prepare: bool = False) -> Di
     if mode == "openai" and settings.openai_api_key:
         try:
             from app.agents.crew import build_crew
-            result = build_crew(scenario, user_context).kickoff()
-            report = _mock_diagnosis(scenario, evidence, mode="crewai")
-            report.summary = str(result)
-            report.agent_trace = [{"crew": "Chief DBA + CPU/Workload + Memory/Database", "status": "completed"}]
+            knowledge = "\n".join(f"- {item.get('name')}: {item.get('content', '')}" for item in retrieved)
+            context = "\n".join(part for part in (user_context, f"Retrieved maintenance experience:\n{knowledge}" if knowledge else "") if part)
+            result = build_crew(scenario, context).kickoff()
+            report = _report_from_crew(scenario, evidence, _finding_from_result(result), _trace_from_result(result))
         except Exception as exc:
             report = _mock_diagnosis(scenario, evidence, mode="mock-fallback")
+            report.summary = f"{report.summary} CrewAI did not return a structured diagnosis, so this report is the deterministic fallback: {exc}"
             report.agent_trace = [{"crew": "failed", "error": str(exc), "fallback": "deterministic evidence mode"}]
     else:
         report = _mock_diagnosis(scenario, evidence, mode="mock")

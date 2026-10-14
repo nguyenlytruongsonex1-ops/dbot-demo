@@ -37,3 +37,18 @@ class DiagnosisReport(BaseModel):
     agent_trace: list[dict[str, Any]] = []
     summary: str
     mode: str
+
+class CrewRootCause(BaseModel):
+    name: str
+    confidence: float
+    evidence: list[str] = []
+
+class CrewRecommendation(BaseModel):
+    action: str
+    rationale: str
+
+class CrewFinding(BaseModel):
+    """Structured diagnosis the chief agent must return in real LLM mode."""
+    root_causes: list[CrewRootCause]
+    recommendations: list[CrewRecommendation]
+    summary: str

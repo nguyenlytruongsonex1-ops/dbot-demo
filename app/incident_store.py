@@ -23,6 +23,12 @@ def _write(items: list[dict[str, Any]]) -> None:
 def list_incidents() -> list[dict[str, Any]]:
     with _lock: return _read()
 
+def clear_incidents() -> int:
+    with _lock:
+        count = len(_read())
+        _write([])
+    return count
+
 def get_incident(incident_id: str) -> dict[str, Any] | None:
     return next((x for x in list_incidents() if x.get("incident_id") == incident_id), None)
 
