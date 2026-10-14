@@ -1,12 +1,24 @@
-from crewai import Agent, Crew, Process, Task
+from crewai import Agent, Crew, LLM, Process, Task
 from app.config import get_settings
+from app.schemas import CrewFinding
 from app.tools.registry import tool_registry
+
+
+def _llm() -> LLM:
+    settings = get_settings()
+    kwargs = {"model": settings.openai_model_name, "api_key": settings.openai_api_key or None}
+    # A Gemini key must stay on the OpenAI-compatible base URL. A bare
+    # "gemini-*" model name is otherwise sent to api.openai.com.
+    if settings.openai_api_base:
+        kwargs["provider"] = "openai"
+        kwargs["base_url"] = settings.openai_api_base
+    return LLM(**kwargs)
 
 
 def build_crew(scenario: str, context: str = "") -> Crew:
     settings = get_settings()
     tools = tool_registry()
-    llm = settings.openai_model_name
+    llm = _llm()
     common = "Use only evidence returned by tools. Never invent metrics. All recommendations are advisory and read-only."
     chief = Agent(
         role="Chief DBA",
@@ -49,10 +61,17 @@ def build_crew(scenario: str, context: str = "") -> Crew:
         agent=memory,
     )
     chief_task = Task(
-        description=f"As Chief DBA, synthesize the CPU/Workload and Memory/Database findings for '{scenario}'. State root causes, evidence, confidence, and advisory recommendations. Do not execute mutations.",
-        expected_output="A final evidence-backed diagnosis.",
+        description=(
+            f"As Chief DBA, synthesize the CPU/Workload and Memory/Database findings for '{scenario}'. "
+            "Return only the structured diagnosis: root causes with confidence from 0 to 1, "
+            "advisory recommendations, and a short summary. Use the tool evidence and supplied context. "
+            "Do not execute mutations and do not claim that any change was applied. "
+            f"Context: {context}"
+        ),
+        expected_output="Structured root causes, advisory recommendations, and a summary grounded in the gathered evidence.",
         agent=chief,
         context=[cpu_task, memory_task],
+        output_pydantic=CrewFinding,
     )
     return Crew(
         agents=[cpu, memory, chief],

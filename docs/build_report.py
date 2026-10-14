@@ -118,14 +118,14 @@ def main():
     meta = doc.add_paragraph()
     meta.alignment = WD_ALIGN_PARAGRAPH.CENTER
     meta.add_run("Phiên bản demo: 0.2.0\n").bold = True
-    meta.add_run("Ngày lập báo cáo: 14/10/2026\n")
+    meta.add_run("Ngày lập báo cáo: 14/10/2026. Cập nhật vận hành cùng ngày.\n")
     meta.add_run("Repository: github.com/nguyenlytruongsonex1-ops/dbot-demo")
     doc.add_paragraph()
     callout = doc.add_table(rows=1, cols=1)
     callout.style = "Table Grid"
     cell = callout.cell(0, 0)
     shade(cell, "EAF2F8")
-    set_cell_text(cell, "Kết luận: Bản tái dựng đã chuyển demo từ quy trình bấm thủ công sang mô hình D-Bot Light có alert realtime, webhook, diagnosis bằng CrewAI và chat theo incident. Đây là bản proof-of-concept chạy một máy, chưa phải hệ thống DBA production.", bold=True)
+    set_cell_text(cell, "Kết luận: Bản tái dựng chạy được trên một máy với alert realtime, webhook, chat theo incident và điều khiển demo trên UI. Mock mode giữ báo cáo giả. Mode API thật lấy root cause và recommendation từ CrewAI. Đây vẫn là proof-of-concept, chưa phải hệ thống DBA production.", bold=True)
     doc.add_page_break()
 
     doc.add_heading("1. Mục tiêu và phạm vi", level=1)
@@ -160,7 +160,7 @@ def main():
         ("alertmanager", "Group/deduplicate alert firing/resolved và POST webhook"),
         ("scenario runner", "Trigger/clear anomaly phục vụ kiểm thử local; không dùng cho production")
     ], [1.6, 4.6])
-    p(doc, "User chat được gắn với từng incident. Người dùng không cần biết SQL; UI hiển thị summary, evidence, root cause sơ bộ và các câu hỏi tự nhiên như ‘Có chắc là do thiếu index không?’ hoặc ‘Session nào đang block?’.")
+    p(doc, "User chat được gắn với từng incident. Người dùng không cần biết SQL; UI hiển thị summary, evidence, root cause và các câu hỏi tự nhiên như ‘Có chắc là do thiếu index không?’ hoặc ‘Session nào đang block?’. Ô chat giữ nguyên chữ đang gõ khi trang tự làm mới mỗi 5 giây.")
 
     doc.add_heading("4. Bộ kịch bản kiểm thử", level=1)
     add_table(doc, ["ID", "Scenario", "Realtime trigger", "Tool/evidence chính", "Kết quả mong đợi"], [
@@ -188,21 +188,26 @@ def main():
     doc.add_heading("6. Kết quả đạt được", level=1)
     bullets(doc, [
         "Đã tích hợp UI local cho trigger scenario, danh sách incident, incident detail, evidence và chat.",
+        "Mỗi workload đang chạy có nút Dừng. Nút này gọi POST /api/scenarios/{name}/clear và chỉ tắt scenario đó.",
+        "Danh sách Incidents có nút Clear. Sau khi xác nhận, POST /api/incidents/clear xóa incident trên trang. Workload, knowledge và database không bị xóa.",
+        "Ô chat không bị xóa khi trang poll lại mỗi 5 giây, kể cả khi incident đang được cập nhật và ô đang được focus.",
         "Đã có Prometheus metrics endpoint và 5 alert rules tương ứng với 5 scenario.",
         "Đã có Alertmanager webhook nhận alert firing/resolved tại /webhooks/alertmanager.",
         "Đã có incident store dạng JSON để lưu lịch sử incident và chat trên volume local.",
         "Đã giữ CrewAI topology gồm Chief DBA, CPU/Workload Agent và Memory/Database Agent.",
-        "Đã giữ mock mode để chạy không cần API key và OpenAI-compatible mode cho LLM thật.",
-        "Đã bổ sung CLI trigger/clear/state và API diagnosis thủ công.",
-        "Kiểm thử source hiện tại: 5 tests passed; Python compile và Compose/rules validation đều đạt."
+        "Mock mode vẫn trả báo cáo giả, không cần API key.",
+        "Mode API thật yêu cầu chief agent trả CrewFinding. Root cause, confidence, recommendation và summary lấy từ kết quả crew. Recommendation luôn requires_approval. Nếu crew lỗi, báo cáo ghi rõ mock-fallback.",
+        "LLM tương thích OpenAI, gồm Gemini qua https://generativelanguage.googleapis.com/v1beta/openai/, được trỏ bằng OPENAI_API_BASE. CrewAI nhận provider openai và base URL này, không gửi key Gemini sang api.openai.com.",
+        "Knowledge vẫn là data/experiences.json. Sửa file có hiệu lực ở lần chẩn đoán sau, không cần build lại image vì thư mục data được mount. Câu root cause của mock mode không đọc file này."
     ])
     add_table(doc, ["Hạng mục kiểm tra", "Kết quả"], [
-        ("Python syntax/compile", "Đạt"),
-        ("Unit tests", "5 passed"),
-        ("Compose YAML parse", "Đạt; đủ postgres, dbot, prometheus, alertmanager"),
-        ("Prometheus rules parse", "Đạt; 5 rules"),
-        ("Mock diagnosis", "Đạt; không cần API key"),
-        ("Docker runtime trên sandbox", "Chưa chạy vì sandbox hiện không có Docker daemon")
+        ("Unit tests", "8 passed trong container dbot"),
+        ("Mock diagnosis", "Đạt; root cause vẫn lấy từ bảng mapping"),
+        ("Báo cáo mode API", "Đạt bằng crew finding giả lập; không gọi API tính phí trong test"),
+        ("Nút Dừng và giữ chữ ô chat", "Đạt trên Chrome headless với API giả"),
+        ("Nút Clear incident", "Đạt: POST /api/incidents/clear trả cleared và danh sách rỗng"),
+        ("Docker trên máy phát triển", "Đạt: Docker Desktop, postgres healthy, dbot healthy"),
+        ("Gemini end-to-end", "Đã sửa đường gọi. Chưa ghi một diagnosis Gemini thành công trong báo cáo này")
     ], [3.2, 2.8])
 
     doc.add_heading("7. Hướng dẫn chạy nhanh", level=1)
@@ -214,19 +219,27 @@ def main():
         "Khởi động: docker compose up --build -d",
         "Mở UI: http://localhost:8000",
         "Bấm lock_contention hoặc slow_query trong phần Trigger demo workload",
-        "Chờ 10–20 giây để Prometheus và Alertmanager gửi incident",
-        "Chọn incident và hỏi trong chat: ‘Session nào đang block?’ hoặc ‘Có chắc do thiếu index không?’",
-        "Dọn demo: bấm Clear all scenarios hoặc chạy docker compose down"
+        "Workload đang chạy hiện nút Dừng. Bấm Dừng để tắt riêng scenario đó",
+        "Chờ khoảng 30–60 giây để Prometheus và Alertmanager gửi incident",
+        "Chọn incident và hỏi trong chat. Chữ đang gõ không bị trang tự làm mới xóa",
+        "Bấm Clear ở khung Incidents để xóa danh sách sau khi xác nhận",
+        "Dọn workload: bấm Clear all scenarios hoặc chạy docker compose down"
     ]
     for i, step in enumerate(steps, 1):
         para = doc.add_paragraph(style="List Number")
         para.add_run(step)
-    p(doc, "Nếu muốn reset hoàn toàn database và metrics: docker compose down -v rồi chạy lại docker compose up --build -d.")
+    p(doc, "Đổi LLM trong .env rồi chạy docker compose up -d. Không cần build lại image. Container dbot được tạo lại để đọc biến mới. Tải lại trang không đủ.")
+    p(doc, "Ví dụ Gemini, key lấy từ Google AI Studio:")
+    p(doc, "LLM_MODE=openai")
+    p(doc, "OPENAI_API_KEY=<gemini-api-key>")
+    p(doc, "OPENAI_MODEL_NAME=<model id trong AI Studio, ví dụ gemini-2.5-flash>")
+    p(doc, "OPENAI_API_BASE=https://generativelanguage.googleapis.com/v1beta/openai/")
+    p(doc, "Xóa sạch dữ liệu demo rồi khởi động lại: docker compose down -v; xóa data/incidents.json và thư mục reports; sau đó docker compose up --build -d. Lệnh down -v xóa volume Postgres, Prometheus và Alertmanager. experiences.json và .env được giữ.")
 
     doc.add_heading("8. Giới hạn và hướng phát triển", level=1)
     p(doc, "Bản Light là proof-of-concept. Một số tín hiệu scenario được điều khiển qua trạng thái demo để bảo đảm alert có thể tái lập trên laptop; diagnosis vẫn đọc database tools để tạo evidence. Vì vậy đây chưa phải benchmark production hay hệ thống DBA tự động hoàn toàn.")
     add_table(doc, ["Hiện tại", "Hướng phát triển"], [
-        ("Experience seed dạng JSON", "Ingest Markdown/PDF, chunking và extraction tự động"),
+        ("Experience JSON chỉ đưa tên vào evidence mock; mode API đưa content vào context của crew", "Ingest Markdown/PDF, chunking và extraction tự động"),
         ("Retrieval nhẹ theo token", "BM25/embedding retrieval có reference"),
         ("State flow bounded", "Tree search/backtracking sâu hơn"),
         ("Khuyến nghị chưa auto-apply", "Approval workflow có audit và validation"),
@@ -234,7 +247,7 @@ def main():
     ], [3.1, 3.1])
 
     doc.add_heading("9. Kết luận", level=1)
-    p(doc, "Bản tái dựng đã đạt mục tiêu tạo một D-Bot Light dễ chạy, có cả realtime alert flow và user chat flow. Kiến trúc giữ được thông điệp cốt lõi của D-Bot: LLM không chỉ nhìn triệu chứng mà phải kết hợp maintenance experience, metrics, system views, query plan và tool evidence.")
+    p(doc, "Bản tái dựng đã đạt mục tiêu tạo một D-Bot Light dễ chạy, có realtime alert flow, user chat và các nút điều khiển demo. Mock mode dùng để trình diễn không cần API. Mode API thật dùng kết quả có cấu trúc của CrewAI cho root cause và recommendation. Kiến trúc giữ thông điệp cốt lõi của D-Bot: kết luận phải dựa trên maintenance experience, metrics, system views, query plan và tool evidence.")
     p(doc, "Phiên bản hiện tại phù hợp cho demo, học tập và phát triển tiếp. Để tiến gần repo gốc hơn, ưu tiên tiếp theo là document-to-knowledge pipeline, dynamic tool selection, diagnosis trace/backtracking và approval workflow đầy đủ.")
 
     doc.add_heading("Tài liệu tham khảo", level=1)
