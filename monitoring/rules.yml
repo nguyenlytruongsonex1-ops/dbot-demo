@@ -1,0 +1,52 @@
+groups:
+  - name: dbot-demo-rules
+    rules:
+      - alert: PostgresHighQueryLatency
+        expr: dbot_demo_query_latency_ms > 500
+        for: 10s
+        labels:
+          severity: warning
+          anomaly_type: slow_query
+        annotations:
+          summary: "PostgreSQL query latency is high"
+          description: "The demo query latency signal is above 500ms."
+
+      - alert: PostgresBlockedSessions
+        expr: dbot_demo_lock_waiters > 0
+        for: 5s
+        labels:
+          severity: critical
+          anomaly_type: lock_contention
+        annotations:
+          summary: "PostgreSQL blocked sessions detected"
+          description: "At least one session is waiting on a lock."
+
+      - alert: PostgresWorkloadContention
+        expr: dbot_demo_active_sessions > 8
+        for: 10s
+        labels:
+          severity: warning
+          anomaly_type: workload_contention
+        annotations:
+          summary: "PostgreSQL workload contention detected"
+          description: "The demo active-session signal is above 8."
+
+      - alert: PostgresDeadTupleRatioHigh
+        expr: dbot_demo_dead_tuple_ratio > 0.02
+        for: 10s
+        labels:
+          severity: warning
+          anomaly_type: table_bloat
+        annotations:
+          summary: "PostgreSQL dead tuple ratio is high"
+          description: "Dead tuples may indicate bloat or delayed vacuum."
+
+      - alert: PostgresExecutionErrors
+        expr: dbot_demo_execution_errors > 0
+        for: 5s
+        labels:
+          severity: warning
+          anomaly_type: execution_error
+        annotations:
+          summary: "PostgreSQL execution error detected"
+          description: "The demo error probe recorded an execution error."

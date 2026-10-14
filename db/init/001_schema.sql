@@ -20,6 +20,23 @@ CREATE TABLE IF NOT EXISTS accounts (
   balance NUMERIC(12,2) NOT NULL DEFAULT 0
 );
 
+CREATE TABLE IF NOT EXISTS demo_scenario_state (
+  scenario TEXT PRIMARY KEY,
+  active BOOLEAN NOT NULL DEFAULT FALSE,
+  metric_value DOUBLE PRECISION NOT NULL DEFAULT 0,
+  detail TEXT NOT NULL DEFAULT '',
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+INSERT INTO demo_scenario_state(scenario, active, metric_value, detail)
+VALUES
+  ('slow_query', FALSE, 0, 'inactive'),
+  ('lock_contention', FALSE, 0, 'inactive'),
+  ('workload_contention', FALSE, 0, 'inactive'),
+  ('table_bloat', FALSE, 0, 'inactive'),
+  ('execution_error', FALSE, 0, 'inactive')
+ON CONFLICT (scenario) DO NOTHING;
+
 INSERT INTO customers(name, region)
 SELECT 'Customer ' || g, CASE WHEN g % 3 = 0 THEN 'north' WHEN g % 3 = 1 THEN 'central' ELSE 'south' END
 FROM generate_series(1, 2000) g

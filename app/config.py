@@ -14,6 +14,7 @@ class Settings(BaseSettings):
     openai_api_base: str = ""
     dbot_max_iterations: int = 8
     dbot_log_level: str = "INFO"
+    incident_store_path: str = "data/incidents.json"
 
     @property
     def database_url(self) -> str:

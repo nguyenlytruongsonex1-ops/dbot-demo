@@ -1,1 +1,1 @@
-"""Reproducible demo anomaly scenarios."""
+"""Reproducible demo anomaly scenarios and CLI wrapper."""

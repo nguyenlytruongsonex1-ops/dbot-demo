@@ -1,0 +1,15 @@
+global:
+  resolve_timeout: 1m
+
+route:
+  receiver: dbot-webhook
+  group_by: [alertname, anomaly_type]
+  group_wait: 2s
+  group_interval: 10s
+  repeat_interval: 1h
+
+receivers:
+  - name: dbot-webhook
+    webhook_configs:
+      - url: http://dbot:8000/webhooks/alertmanager
+        send_resolved: true

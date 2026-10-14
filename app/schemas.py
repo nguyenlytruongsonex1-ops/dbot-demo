@@ -8,6 +8,9 @@ class DiagnoseRequest(BaseModel):
     prepare: bool = True
     user_context: str = ""
 
+class ChatRequest(BaseModel):
+    message: str = Field(min_length=1, max_length=4000)
+
 class Evidence(BaseModel):
     source: str
     summary: str

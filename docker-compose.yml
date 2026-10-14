@@ -32,6 +32,7 @@ services:
       OPENAI_API_BASE: ${OPENAI_API_BASE:-}
       DBOT_MAX_ITERATIONS: ${DBOT_MAX_ITERATIONS:-8}
       DBOT_LOG_LEVEL: ${DBOT_LOG_LEVEL:-INFO}
+      INCIDENT_STORE_PATH: /app/data/incidents.json
     ports:
       - "${APP_PORT:-8000}:8000"
     depends_on:
@@ -47,5 +48,39 @@ services:
       retries: 12
     restart: unless-stopped
 
+  prometheus:
+    image: prom/prometheus:v2.55.1
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --web.enable-lifecycle
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./monitoring/rules.yml:/etc/prometheus/rules.yml:ro
+      - prometheus_data:/prometheus
+    ports:
+      - "${PROMETHEUS_PORT:-9090}:9090"
+    depends_on:
+      dbot:
+        condition: service_healthy
+    restart: unless-stopped
+
+  alertmanager:
+    image: prom/alertmanager:v0.27.0
+    command:
+      - --config.file=/etc/alertmanager/alertmanager.yml
+      - --storage.path=/alertmanager
+    volumes:
+      - ./monitoring/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - alertmanager_data:/alertmanager
+    ports:
+      - "${ALERTMANAGER_PORT:-9093}:9093"
+    depends_on:
+      dbot:
+        condition: service_healthy
+    restart: unless-stopped
+
 volumes:
   postgres_data:
+  prometheus_data:
+  alertmanager_data:
