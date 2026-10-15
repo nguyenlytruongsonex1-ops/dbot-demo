@@ -1,4 +1,5 @@
 -- Kịch bản: lock_holder (giữ khóa dòng mà không commit)
+-- Nguồn: tương ứng kịch bản 3 (tranh chấp khóa) trong dự án "LLM As DBA" của Nhóm 3.
 -- Mô tả: mở transaction, cập nhật đơn hàng o_orderkey = 1 rồi ngủ 120 giây trước khi commit.
 --        Chạy kịch bản này trước, sau đó chạy lock_waiter.
 -- Dấu hiệu mong đợi: một phiên giữ transaction lâu và khóa dòng trên orders.

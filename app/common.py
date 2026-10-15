@@ -19,14 +19,20 @@ SQLITE_PATH = os.getenv("SQLITE_PATH", "data/dbot.sqlite")
 SCENARIO_DIR = os.getenv("SCENARIO_DIR", "scenarios")
 KNOWLEDGE_DIR = os.getenv("KNOWLEDGE_DIR", "knowledge")
 
-MONITOR_INTERVAL = float(os.getenv("MONITOR_INTERVAL", "10"))
+MONITOR_INTERVAL = float(os.getenv("MONITOR_INTERVAL", "5"))
 RESOLVE_AFTER_SCANS = int(os.getenv("RESOLVE_AFTER_SCANS", "3"))
 
-LLM_PROVIDER = os.getenv("LLM_PROVIDER", "ollama")  # ollama | openai | mock
+# Nguồn LLM mặc định: claude | gemini | openai | ollama | mock.
+# Nếu nguồn đã chọn không có API key hoặc gọi lỗi, hệ thống tự chuyển sang Ollama.
+LLM_PROVIDER = os.getenv("LLM_PROVIDER", "ollama")
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://host.docker.internal:11434")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen2.5:7b")
 OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+CLAUDE_MODEL = os.getenv("CLAUDE_MODEL", "claude-sonnet-5-5")
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.8-flash")
+BACKEND_URL = os.getenv("BACKEND_URL", "http://localhost:8000")
+ANALYZE_DEBOUNCE_SEC = float(os.getenv("ANALYZE_DEBOUNCE_SEC", "20"))
 
 
 def pg_connect(user=None, password=None, app_name="dbot-demo", autocommit=True):
@@ -56,6 +62,9 @@ CREATE TABLE IF NOT EXISTS alerts (
 CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT);
 """
 
+# Cột thêm ở phiên bản Streamlit. Thêm bằng ALTER để dùng được với file SQLite cũ.
+EXTRA_COLUMNS = {"llm_provider": "TEXT", "analysis_started_at": "REAL"}
+
 
 @contextmanager
 def store():
@@ -65,6 +74,10 @@ def store():
     try:
         con.execute("PRAGMA journal_mode=WAL")
         con.executescript(SCHEMA)
+        have = {r[1] for r in con.execute("PRAGMA table_info(alerts)")}
+        for col, typ in EXTRA_COLUMNS.items():
+            if col not in have:
+                con.execute(f"ALTER TABLE alerts ADD COLUMN {col} {typ}")
         yield con
         con.commit()
     finally:
@@ -83,6 +96,16 @@ def bump_version(con):
 def get_version(con):
     row = con.execute("SELECT v FROM meta WHERE k='version'").fetchone()
     return row["v"] if row else "0"
+
+
+def get_setting(con, key, default=None):
+    row = con.execute("SELECT v FROM meta WHERE k=?", (f"setting:{key}",)).fetchone()
+    return row["v"] if row else default
+
+
+def set_setting(con, key, value):
+    con.execute("INSERT INTO meta(k, v) VALUES(?, ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v",
+                (f"setting:{key}", str(value)))
 
 
 def alert_to_dict(row):

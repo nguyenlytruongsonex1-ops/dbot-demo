@@ -1,21 +1,19 @@
-"""Backend FastAPI: API alert, WebSocket real time, chạy/dừng kịch bản, upload,
-và nút nhờ AI phân tích (giao việc cho dbot-worker qua SQLite)."""
-import asyncio
+"""Backend FastAPI (API nội bộ cho Streamlit): danh sách alert, cài đặt,
+chạy và dừng kịch bản, tải kịch bản lên, xếp hàng phân tích cho dbot-worker."""
 import os
 import re
 import threading
 import time
 
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse
-from fastapi.staticfiles import StaticFiles
+from fastapi import Body, FastAPI, File, Form, HTTPException, UploadFile
 
 from app.common import (PG_SCENARIO_PASSWORD, PG_SCENARIO_USER, SCENARIO_DIR, alert_to_dict,
-                        bump_version, get_version, pg_connect, scenario_header, split_sql, store)
+                        bump_version, get_setting, get_version, pg_connect, scenario_header,
+                        set_setting, split_sql, store)
+from app import common
 
-app = FastAPI(title="D-Bot Demo")
-STATIC = os.path.join(os.path.dirname(__file__), "static")
-app.mount("/static", StaticFiles(directory=STATIC), name="static")
+app = FastAPI(title="D-Bot Demo API")
+SETTINGS = {"auto_analyze": "1", "monitor_paused": "0", "default_llm": common.LLM_PROVIDER}
 NAME_RE = re.compile(r"^[a-z0-9_]{2,40}$")
 
 runs = {}  # tên kịch bản -> trạng thái lần chạy gần nhất
@@ -27,20 +25,33 @@ def touch():
         bump_version(con)
 
 
-# ---------------- Trang web ----------------
-@app.get("/")
-def index():
-    return FileResponse(os.path.join(STATIC, "index.html"))
-
-
-@app.get("/alert/{alert_id}")
-def alert_page(alert_id: int):
-    return FileResponse(os.path.join(STATIC, "detail.html"))
-
-
 @app.get("/health")
 def health():
     return {"ok": True}
+
+
+# ---------------- Cài đặt ----------------
+@app.get("/api/settings")
+def get_settings():
+    with store() as con:
+        out = {k: get_setting(con, k, d) for k, d in SETTINGS.items()}
+        hb = get_setting(con, "monitor_heartbeat", "")
+        out["version"] = get_version(con)
+    ts, _, status = hb.partition("|")
+    out["monitor_status"] = status or "unknown"
+    out["monitor_last_scan_sec"] = round(time.time() - float(ts), 1) if ts else None
+    return out
+
+
+@app.put("/api/settings")
+def put_settings(values: dict = Body(...)):
+    with store() as con:
+        for k, v in values.items():
+            if k not in SETTINGS:
+                raise HTTPException(400, f"Không có cài đặt {k}")
+            set_setting(con, k, v)
+        bump_version(con)
+    return get_settings()
 
 
 # ---------------- Alert ----------------
@@ -61,33 +72,29 @@ def get_alert(alert_id: int):
 
 
 @app.post("/api/alerts/{alert_id}/analyze")
-def analyze(alert_id: int):
+def analyze(alert_id: int, provider: str = ""):
+    """Xếp hàng phân tích (lần đầu hoặc phân tích lại), có thể chọn nguồn LLM."""
+    if provider and provider not in ("claude", "gemini", "openai", "ollama", "mock"):
+        raise HTTPException(400, "Nguồn LLM không hợp lệ")
     with store() as con:
         r = con.execute("SELECT analysis_status FROM alerts WHERE id=?", (alert_id,)).fetchone()
         if not r:
             raise HTTPException(404, "Không tìm thấy alert")
-        if r["analysis_status"] == "analyzing":
-            return {"status": "analyzing"}
-        con.execute("UPDATE alerts SET analysis_status='analyzing', report=NULL, updated_at=? WHERE id=?",
-                    (time.time(), alert_id))
+        if r["analysis_status"] in ("analyzing", "queued"):
+            return {"status": r["analysis_status"]}
+        con.execute("UPDATE alerts SET analysis_status='queued', llm_provider=COALESCE(NULLIF(?, ''), llm_provider), "
+                    "updated_at=? WHERE id=?", (provider, time.time(), alert_id))
         bump_version(con)
-    return {"status": "analyzing"}
+    return {"status": "queued"}
 
 
-@app.websocket("/ws")
-async def ws(websocket: WebSocket):
-    await websocket.accept()
-    last = None
-    try:
-        while True:
-            with store() as con:
-                v = get_version(con)
-            if v != last:
-                last = v
-                await websocket.send_json({"type": "changed", "version": v})
-            await asyncio.sleep(1)
-    except (WebSocketDisconnect, RuntimeError):
-        pass
+@app.delete("/api/alerts")
+def clear_alerts():
+    """Xóa lịch sử alert (dùng khi bắt đầu một buổi demo mới)."""
+    with store() as con:
+        n = con.execute("DELETE FROM alerts").rowcount
+        bump_version(con)
+    return {"deleted": n}
 
 
 # ---------------- Kịch bản ----------------

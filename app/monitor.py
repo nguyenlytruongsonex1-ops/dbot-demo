@@ -6,8 +6,8 @@ import os
 import re
 import time
 
-from app.common import (MONITOR_INTERVAL, RESOLVE_AFTER_SCANS, bump_version,
-                        pg_connect, store)
+from app.common import (MONITOR_INTERVAL, RESOLVE_AFTER_SCANS, bump_version, get_setting,
+                        pg_connect, set_setting, store)
 
 log = logging.getLogger("monitor")
 
@@ -33,7 +33,7 @@ SELECT pid, usename, application_name, state, wait_event_type, wait_event,
        (xact_start < query_start) AS earlier_stmts
 FROM pg_stat_activity
 WHERE backend_type = 'client backend' AND pid <> pg_backend_pid()
-  AND application_name <> ALL(%s)
+  AND application_name NOT LIKE 'dbot-%%' AND application_name <> ALL(%s)
 """
 
 TABLES_SQL = """
@@ -196,12 +196,29 @@ def apply(signals):
             bump_version(con)
 
 
+def paused():
+    """Monitor tạm dừng khi tab Mini lambda-Tune đang đo, để không báo nhầm."""
+    with store() as con:
+        return get_setting(con, "monitor_paused", "0") == "1"
+
+
+def heartbeat(status):
+    with store() as con:
+        set_setting(con, "monitor_heartbeat", f"{time.time()}|{status}")
+
+
 def main():
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
     state = {}
     conn = None
     while True:
         try:
+            if paused():
+                heartbeat("paused")
+                state = {}  # bỏ số liệu cũ để lần quét sau không tính chênh lệch sai
+                time.sleep(MONITOR_INTERVAL)
+                continue
+            heartbeat("running")
             if conn is None or conn.closed:
                 conn = pg_connect(app_name="dbot-monitor")
             with conn.cursor() as cur:

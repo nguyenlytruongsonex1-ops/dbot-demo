@@ -5,33 +5,55 @@ AI chỉ đề xuất. Không có công cụ nào được phép sửa dữ li�
 import json
 import re
 
-from app import common
+from app import common, llm
 from app.dbot.tools import ToolBox
 
 REPORT_KEYS = ("summary", "steps", "root_cause", "remediation")
 
 
-def diagnose(alert: dict) -> dict:
+def diagnose(alert: dict, provider: str = None) -> dict:
+    """Chẩn đoán một alert. Nếu nguồn LLM đã chọn không có key hoặc lỗi thì chuyển sang Ollama."""
+    provider = provider or common.LLM_PROVIDER
     tb = ToolBox()
+    notes = []
     try:
-        if common.LLM_PROVIDER == "mock":
-            report = mock_diagnose(alert, tb)
+        if provider == "mock":
+            report, used = mock_diagnose(alert, tb), "mock"
         else:
-            report = crew_diagnose(alert, tb)
+            order = [provider] if provider == "ollama" else [provider, "ollama"]
+            report, used = None, None
+            for p in order:
+                if not llm.available(p):
+                    notes.append(f"Không có API key cho {llm.LABELS[p]}, chuyển sang Ollama.")
+                    continue
+                try:
+                    tb.calls.clear()
+                    report, used = crew_diagnose(alert, tb, p), p
+                    break
+                except Exception as e:  # noqa: BLE001
+                    notes.append(f"{llm.LABELS[p]} lỗi: {str(e)[:200]}")
+            if report is None:
+                raise RuntimeError(" ".join(notes) or "Không gọi được LLM nào")
         report["tool_calls"] = tb.calls
-        report["provider"] = common.LLM_PROVIDER
+        report["provider"] = used
+        report["model"] = llm.model_of(used)
+        report["provider_requested"] = provider
+        report["fallback_notes"] = notes
         return report
     finally:
         tb.close()
 
 
 # ---------------- CrewAI ----------------
-def _llm():
+def _llm(provider):
     from crewai import LLM
-    if common.LLM_PROVIDER == "openai":
-        import os
+    if provider == "claude":
+        return LLM(model=f"anthropic/{common.CLAUDE_MODEL}", api_key=llm.api_key("claude"), max_tokens=2000)
+    if provider == "gemini":
+        return LLM(model=f"gemini/{common.GEMINI_MODEL}", api_key=llm.api_key("gemini"))
+    if provider == "openai":
         return LLM(model=f"openai/{common.OPENAI_MODEL}", base_url=common.OPENAI_BASE_URL,
-                   api_key=os.getenv("OPENAI_API_KEY", ""), temperature=0.1)
+                   api_key=llm.api_key("openai"), temperature=0.1)
     return LLM(model=f"ollama/{common.OLLAMA_MODEL}", base_url=common.OLLAMA_BASE_URL, temperature=0.1)
 
 
@@ -71,9 +93,9 @@ def _make_tools(tb: ToolBox):
     return [explain_query, get_locks, get_activity, get_table_stats, get_top_statements, search_knowledge]
 
 
-def crew_diagnose(alert: dict, tb: ToolBox) -> dict:
+def crew_diagnose(alert: dict, tb: ToolBox, provider: str) -> dict:
     from crewai import Agent, Crew, Process, Task
-    llm = _llm()
+    model = _llm(provider)
     alert_text = json.dumps({k: alert[k] for k in ("type", "title", "severity", "details")},
                             ensure_ascii=False, default=str)
     diag = Agent(
@@ -81,12 +103,12 @@ def crew_diagnose(alert: dict, tb: ToolBox) -> dict:
         goal="Tìm nguyên nhân gốc của alert bằng dữ liệu thật từ công cụ",
         backstory="Bạn là DBA giàu kinh nghiệm. Bạn chỉ kết luận dựa trên dữ liệu công cụ trả về. "
                   "Bạn không bao giờ sửa database.",
-        tools=_make_tools(tb), llm=llm, max_iter=8, verbose=False, allow_delegation=False)
+        tools=_make_tools(tb), llm=model, max_iter=8, verbose=False, allow_delegation=False)
     reporter = Agent(
         role="Người viết báo cáo sự cố",
         goal="Viết báo cáo ngắn gọn, rõ ràng bằng tiếng Việt, đúng định dạng JSON",
         backstory="Bạn tổng hợp kết quả chẩn đoán cho DBA. Bạn chỉ đề xuất, không thực thi.",
-        llm=llm, verbose=False, allow_delegation=False)
+        llm=model, verbose=False, allow_delegation=False)
     t1 = Task(
         description=f"Alert từ monitor:\n{alert_text}\n\n"
                     "Hãy dùng công cụ để điều tra (ít nhất: tra tri thức, và 1-3 công cụ dữ liệu phù hợp). "
@@ -138,7 +160,20 @@ def mock_diagnose(alert: dict, tb: ToolBox) -> dict:
     table = d.get("table", "tpch.lineitem")
     if t == "long_query":
         tb.get_activity(); step(None, f"Phiên {d.get('pid')} chạy {d.get('duration_sec')} giây, trạng thái chờ: {d.get('wait_event')}.")
-        plan = tb.explain_query(d.get("query", "")); step(None, "Kế hoạch có Seq Scan trên bảng lớn." if "Seq Scan" in plan else "Đã xem kế hoạch thực thi.")
+        plan = tb.explain_query(d.get("query", ""))
+        if "SubPlan" in plan:
+            step(None, "Kế hoạch có SubPlan trong Filter: truy vấn con tương quan chạy lại cho từng dòng của truy vấn ngoài.")
+            root = "Truy vấn con tương quan bị thực thi lặp lại cho mỗi dòng, mỗi lần lại quét toàn bảng."
+            rem = [{"action": "Viết lại bằng JOIN với bảng tạm GROUP BY (unnesting)",
+                    "sql": "SELECT count(*) FROM tpch.orders o JOIN (SELECT o_custkey, avg(o_totalprice) AS a "
+                           "FROM tpch.orders GROUP BY o_custkey) d ON o.o_custkey = d.o_custkey WHERE o.o_totalprice > d.a;",
+                    "risk": "Cần kiểm tra kết quả giống bản cũ"},
+                   {"action": "Hoặc tạo index cho cột tương quan", "sql": "CREATE INDEX CONCURRENTLY idx_o_custkey ON tpch.orders(o_custkey);",
+                    "risk": "Tốn I/O khi tạo"},
+                   {"action": "Hủy query đang chạy nếu ảnh hưởng hệ thống", "sql": f"SELECT pg_cancel_backend({d.get('pid')});", "risk": "Thấp"}]
+            return {"summary": f"[Chế độ mock, không dùng LLM] {alert['title']}. {root}",
+                    "steps": steps, "root_cause": root, "remediation": rem}
+        step(None, "Kế hoạch có Seq Scan trên bảng lớn." if "Seq Scan" in plan else "Đã xem kế hoạch thực thi.")
         root = "Một query tính toán nặng quét toàn bộ bảng nhiều lần, chiếm CPU lâu."
         rem = [{"action": "Hủy query đang chạy nếu ảnh hưởng hệ thống", "sql": f"SELECT pg_cancel_backend({d.get('pid')});", "risk": "Thấp, chỉ hủy câu lệnh hiện tại"},
                {"action": "Giới hạn thời gian chạy cho user ứng dụng", "sql": "ALTER ROLE scenario_runner SET statement_timeout = '30s';", "risk": "Query hợp lệ chạy lâu cũng bị hủy"}]

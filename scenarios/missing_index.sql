@@ -1,4 +1,5 @@
 -- Kịch bản: missing_index (thiếu index làm truy vấn chậm)
+-- Nguồn: tương ứng kịch bản 1 (thiếu index) trong dự án "LLM As DBA" của Nhóm 3.
 -- Mô tả: tìm các dòng hàng (lineitem) theo l_partkey 10000 lần. Cột này không có index,
 --        nên mỗi lần tìm PostgreSQL phải quét toàn bảng lineitem (Seq Scan).
 -- Dấu hiệu mong đợi: pg_stat_statements có câu SELECT trên lineitem được gọi rất nhiều lần,

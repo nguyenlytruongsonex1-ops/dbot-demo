@@ -6,4 +6,4 @@ RUN pip install --no-cache-dir -r requirements.txt && \
     if [ "$WITH_CREWAI" = "1" ]; then pip install --no-cache-dir -r requirements-worker.txt; fi
 COPY app ./app
 COPY knowledge ./knowledge
-ENV PYTHONUNBUFFERED=1
+ENV PYTHONUNBUFFERED=1 PYTHONPATH=/app

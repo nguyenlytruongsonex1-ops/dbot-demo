@@ -1,157 +1,181 @@
-# D-Bot Demo: bảng theo dõi sự cố PostgreSQL có AI hỗ trợ
+# D-Bot Demo trên PostgreSQL, giao diện Streamlit có giám sát realtime
 
-Đây là bản demo để học, dựng lại ở mức nhẹ ý tưởng của bài báo D-Bot
-(arXiv 2312.01454). Hệ thống gây sự cố thật trên PostgreSQL, phát hiện bất thường,
-rồi nhờ một LLM chạy trên máy bạn phân tích nguyên nhân và đề xuất cách xử lý.
+Đây là bản demo để học, dựng lại ý tưởng của bài báo D-Bot (arXiv 2312.01454) ở mức nhẹ.
+Hệ thống gây sự cố thật trên PostgreSQL, tự phát hiện bất thường, rồi tự nhờ AI phân tích.
 
-AI chỉ đề xuất. AI không tự chạy lệnh sửa lỗi trên database.
+Bản này tích hợp dự án "LLM As DBA" của Nhóm 3 (bản gốc dùng MySQL 8 và Streamlit).
+Ba kịch bản trình diễn từng bước, cách hỏi AI theo prompt A và B, cách chấm điểm và Mini λ-Tune
+được chuyển từ dự án đó sang PostgreSQL. Xin cảm ơn Nhóm 3.
 
-## Thành phần
+## Hệ thống gồm gì
 
-| Container | Việc làm |
-|---|---|
-| postgres | PostgreSQL 16, bật pg_stat_statements, chứa dữ liệu TPC-H trong schema tpch |
-| tpch-seed | Chạy một lần: build dbgen, sinh dữ liệu TPC-H SF 0.1 rồi nạp vào PostgreSQL |
-| monitor | Cứ 10 giây đọc thống kê của PostgreSQL, tạo alert, tự đóng alert khi hết sự cố |
-| backend | FastAPI, phục vụ trang web, API, WebSocket, chạy và dừng kịch bản |
-| dbot-worker | D-Bot dùng CrewAI với 2 agent: Chẩn đoán và Báo cáo |
+- `postgres`: PostgreSQL 16, bật `pg_stat_statements`.
+- `tpch-seed`: sinh dữ liệu TPC-H SF 0.1 (khoảng 100 MB) bằng `dbgen` rồi nạp vào DB. Chỉ chạy một lần.
+- `monitor`: quét DB mỗi 5 giây, tạo alert khi vượt ngưỡng.
+- `backend`: API nội bộ (FastAPI). Chạy và dừng kịch bản, lưu cài đặt.
+- `dbot-worker`: tự nhận alert mới và phân tích bằng CrewAI.
+- `streamlit`: giao diện duy nhất, ở cổng 8501.
 
-Ollama không chạy trong Docker. Ollama chạy trực tiếp trên máy bạn.
+Alert và báo cáo lưu trong SQLite, nên mở lại trang vẫn còn.
 
-## Dữ liệu demo: TPC-H scale factor 0.1
+## Các tab trên giao diện
 
-Demo dùng bộ dữ liệu chuẩn TPC-H với scale factor 0.1 (khoảng 100 MB).
-Có 8 bảng: region, nation, part, supplier, partsupp, customer, orders, lineitem.
-Bảng lớn nhất là lineitem với khoảng 600 nghìn dòng.
+- Tab 0, Chuẩn bị: kiểm tra kết nối, dữ liệu và nguồn LLM.
+- Tab 1, Thiếu index: chạy 50 truy vấn theo `l_partkey`, đo, hỏi AI, tạo index, đo lại.
+- Tab 2, Truy vấn con tương quan: chạy bản chậm, xem `EXPLAIN` có `SubPlan`, viết lại bằng JOIN.
+- Tab 3, Tranh chấp khóa: phiên A giữ khóa, phiên B bị chặn, phiên C quan sát, rồi ROLLBACK.
+- Tab 4, Mini λ-Tune: AI đề xuất cấu hình, hệ thống chỉ chạy lệnh được cho phép, rồi đo thật.
+- Tab 5, Giám sát realtime: chạy kịch bản, xem alert và báo cáo. Mọi thứ chạy tự động.
+- Tab 6, Tổng kết: bảng chấm điểm AI và số đo trước, sau khi sửa.
 
-Dữ liệu không nằm trong repo. Khi chạy `docker compose up`, container tpch-seed sẽ:
+Ở tab 1 đến 3, prompt A chỉ kể triệu chứng. Prompt B làm theo kiểu D-Bot, có thẻ kinh nghiệm và số đo thật.
+Câu trả lời được chấm tự động bằng từ khóa. Bạn có thể sửa điểm bằng tay.
 
-1. Tải và build công cụ dbgen từ https://github.com/gregrahn/tpch-kit.
-2. Chạy `dbgen -s 0.1` để sinh các file .tbl.
-3. Nạp các file vào PostgreSQL bằng lệnh COPY, rồi chạy ANALYZE.
+## Luồng tự động ở tab 5
 
-Các bảng chỉ có khóa chính. Cố ý không có index phụ như l_partkey hay o_custkey,
-để kịch bản thiếu index có tác dụng. Nếu dữ liệu đã có, tpch-seed sẽ bỏ qua bước nạp.
-Muốn đổi kích thước, sửa `TPCH_SF` trong file .env trước khi chạy lần đầu.
+1. Bạn bấm Chạy một kịch bản, hoặc có sự cố thật trên DB.
+2. Monitor thấy dấu hiệu vượt ngưỡng và tạo alert.
+3. Sau khoảng 20 giây, nếu dấu hiệu vẫn còn, worker tự phân tích alert đó.
+4. Mỗi alert chỉ phân tích một lần. Mỗi lúc chỉ chạy một phân tích.
+5. Trang tự làm mới mỗi 3 giây. Trạng thái đi từ "chờ phân tích" sang "đang phân tích" rồi "đã có báo cáo".
+6. Khi sự cố hết, sau 3 lần quét sạch, alert chuyển sang "đã giải quyết".
 
-## 1. Chuẩn bị
+Công tắc "Tự động phân tích" mặc định bật. Tắt đi thì bạn tự bấm nút "Phân tích".
+Nút "Phân tích lại" cho phép chọn nguồn LLM khác.
 
-1. Cài Docker Desktop (Windows, macOS) hoặc Docker Engine có Compose (Linux).
-2. Cài Ollama tại https://ollama.com.
-3. Tải model. Lệnh này tải khoảng 4,7 GB:
+AI chỉ đề xuất. Công cụ của worker chỉ có quyền đọc. DBA tự quyết định có chạy lệnh sửa hay không.
+
+## Cài đặt
+
+Cần có:
+
+- Docker Desktop (hoặc Docker Engine) có `docker compose`.
+- Ollama, nếu muốn chạy LLM trên máy. Không bắt buộc nếu bạn có API key.
+
+### Bước 1. Cài Ollama và tải model
+
+Tải Ollama tại https://ollama.com rồi chạy:
 
 ```bash
 ollama pull qwen2.5:7b
 ```
 
-4. Kiểm tra Ollama đang chạy:
-
-```bash
-curl http://localhost:11434/api/tags
-```
-
-Trên Linux, Ollama mặc định chỉ nghe ở 127.0.0.1. Container không gọi tới được.
-Hãy cho Ollama nghe ở mọi địa chỉ:
+Trên Linux, cho Ollama nghe ở mọi địa chỉ để container gọi được:
 
 ```bash
 sudo systemctl edit ollama
-# thêm 2 dòng sau rồi lưu:
+# thêm 2 dòng:
 # [Service]
 # Environment="OLLAMA_HOST=0.0.0.0"
 sudo systemctl restart ollama
 ```
 
-## 2. Chạy hệ thống
+Trên Windows và macOS không cần bước này.
+
+### Bước 2. Tải mã nguồn và tạo file .env
 
 ```bash
-git clone -b feature/dbot-demo https://github.com/nguyenlytruongsonex1-ops/dbot-demo.git
+git clone -b feature/realtime-streamlit-pg https://github.com/nguyenlytruongsonex1-ops/dbot-demo.git
 cd dbot-demo
 cp .env.example .env
+```
+
+Nếu có API key, điền vào `.env`: `ANTHROPIC_API_KEY`, `GEMINI_API_KEY` hoặc `OPENAI_API_KEY`.
+Chọn nguồn mặc định bằng `LLM_PROVIDER` (claude, gemini, openai, ollama, mock).
+Nếu thiếu key hoặc gọi lỗi, hệ thống tự chuyển sang Ollama.
+Không commit file `.env`.
+
+### Bước 3. Chạy
+
+```bash
 docker compose up --build -d
 ```
 
-Lần đầu mất vài phút vì phải tải image và cài CrewAI.
-Bước sinh và nạp dữ liệu TPC-H mất khoảng 10 đến 30 giây. Xem tiến độ: `docker compose logs tpch-seed`.
+Lần đầu mất vài phút để build và sinh dữ liệu. Sau đó mở http://localhost:8501.
 
-Mở trình duyệt: http://localhost:8000
-
-Xem log nếu cần:
+Xem log:
 
 ```bash
 docker compose logs -f monitor dbot-worker
 ```
 
-## 3. Chạy thử một kịch bản
+Dừng hệ thống:
 
-1. Ở cột "Kịch bản sự cố", bấm Chạy ở dòng missing_index.
-2. Chờ 10 đến 20 giây. Một alert mới hiện ra ở bảng bên trái.
-3. Bấm "Nhờ AI phân tích". Trạng thái chuyển sang "đang phân tích".
-4. Khi xong, bấm vào tên alert để xem chi tiết: tóm tắt, các bước suy luận, nguyên nhân, phương án xử lý.
-5. Bấm Dừng ở kịch bản. Sau 3 lần quét không còn dấu hiệu (khoảng 30 đến 40 giây), alert tự chuyển sang "đã giải quyết".
+```bash
+docker compose down        # giữ dữ liệu
+docker compose down -v     # xóa cả dữ liệu
+```
 
-## 4. Các kịch bản có sẵn
+## Các kịch bản có sẵn
 
-| Kịch bản | Sự cố | Ghi chú |
+Các file nằm trong thư mục `scenarios/`. Đầu mỗi file có chú thích về sự cố và cách xử lý.
+
+| Kịch bản | Sự cố | Cách xử lý mong đợi |
 |---|---|---|
-| cpu_high | Truy vấn tổng hợp kiểu TPC-H Q1 lặp 50 lần trên lineitem, CPU cao | Chạy 1 đến 3 phút |
-| missing_index | Tìm lineitem theo l_partkey (không có index) 10000 lần | Chạy vài phút |
-| lock_holder | Giữ khóa đơn hàng o_orderkey = 1 trong 120 giây | Chạy trước lock_waiter |
-| lock_waiter | Cập nhật cùng dòng, bị kẹt | Chạy sau lock_holder |
-| idle_in_transaction | Transaction mở 90 giây không commit | |
-| table_bloat | Tắt autovacuum, update toàn bảng lineitem 3 lần | Alert chỉ hết sau khi chạy fix_vacuum |
-| fix_vacuum | Dọn dẹp sau table_bloat | Không phải sự cố |
+| `cpu_high` | Lặp 50 lần truy vấn tổng hợp nặng trên `lineitem` | Hủy query, đặt `statement_timeout` |
+| `missing_index` | Tìm `lineitem` theo `l_partkey` 10000 lần | `CREATE INDEX` trên `l_partkey` |
+| `correlated_subquery` | Truy vấn con tương quan trên `orders` | Viết lại bằng JOIN, hoặc index `o_custkey` |
+| `lock_holder` | Giữ khóa dòng 120 giây | Kết thúc phiên giữ khóa |
+| `lock_waiter` | Cập nhật cùng dòng, bị chặn | Đặt `lock_timeout` |
+| `idle_in_transaction` | Mở transaction 90 giây không commit | Đặt `idle_in_transaction_session_timeout` |
+| `table_bloat` | Tắt autovacuum, cập nhật toàn bảng 3 lần | `VACUUM`, bật lại autovacuum |
+| `fix_vacuum` | Dọn sau `table_bloat`, không phải sự cố | Không áp dụng |
 
-Mỗi file trong thư mục scenarios/ có phần comment đầu file giải thích sự cố,
-dấu hiệu mong đợi và cách xử lý.
+Kịch bản khóa: chạy `lock_holder` trước, rồi `lock_waiter`.
+Kịch bản bloat: alert chỉ hết sau khi chạy `fix_vacuum`.
 
-## 5. Thêm kịch bản mới
+## Thêm kịch bản mới
 
-Cách 1: trên trang web, ở mục "Thêm kịch bản", nhập tên (chữ thường, số, dấu gạch dưới)
-và chọn file .sql rồi bấm Tải lên.
+Ở tab 5, mở mục "Thêm kịch bản bằng file .sql".
+Nhập tên (chữ thường, số, dấu gạch dưới) và chọn file `.sql` (UTF-8, tối đa 200 KB).
 
-Cách 2: chép file .sql vào thư mục scenarios/. Trang web sẽ thấy ngay.
+Kịch bản chạy bằng user `scenario_runner`. User này chỉ có quyền trên schema `tpch`.
+Mỗi câu lệnh bị giới hạn 10 phút. Mỗi câu lệnh trong file chạy lần lượt trên một kết nối.
 
-Lưu ý:
-- Mỗi kịch bản chạy một lần, trên một kết nối, từng câu lệnh theo thứ tự.
-- Kịch bản chạy bằng user scenario_runner, chỉ có quyền trên schema tpch.
-- Mỗi câu lệnh bị giới hạn 10 phút.
-- Nên viết vài dòng comment bắt đầu bằng -- ở đầu file để mô tả kịch bản.
+Ví dụ:
 
-## 6. Đổi model hoặc dùng API khác
-
-Sửa file .env rồi chạy lại `docker compose up -d`:
-
-- Đổi model Ollama: `OLLAMA_MODEL=llama3.1:8b`
-- Dùng API tương thích OpenAI: `LLM_PROVIDER=openai`, điền `OPENAI_API_KEY`.
-- Thử luồng mà không cần LLM: `LLM_PROVIDER=mock`. D-Bot vẫn gọi công cụ thật trên DB
-  nhưng kết luận theo luật viết sẵn.
-
-## 7. Xử lý sự cố thường gặp
-
-| Hiện tượng | Cách xử lý |
-|---|---|
-| Phân tích báo lỗi Connection error | Kiểm tra Ollama đang chạy và nghe ở 0.0.0.0 (xem mục 1) |
-| Phân tích rất lâu | Model 7B trên CPU mất 1 đến 3 phút. Thử model nhỏ hơn như qwen2.5:3b |
-| Cổng 5432 hoặc 8000 bị chiếm | Tắt PostgreSQL cũ trên máy, hoặc đổi APP_PORT trong .env |
-| Không thấy alert | Chờ ít nhất 2 lần quét (20 giây). Xem `docker compose logs monitor` |
-| tpch-seed báo lỗi khi build | Kiểm tra mạng (cần tải tpch-kit từ GitHub), rồi chạy lại `docker compose up --build -d` |
-| Muốn làm lại từ đầu | `docker compose down -v` rồi `docker compose up --build -d` |
-
-## 8. Cấu trúc thư mục
-
-```
-app/            mã nguồn: monitor, backend, worker, D-Bot, giao diện web
-db/init/        SQL tạo schema TPC-H và user cho kịch bản
-seed/           Dockerfile và script sinh, nạp dữ liệu TPC-H
-scenarios/      các file kịch bản sự cố
-knowledge/      tri thức chẩn đoán dạng markdown cho D-Bot tra cứu
-docs/           báo cáo tổng hợp (docx) và hình kiến trúc
-tests/          kiểm thử nhỏ
+```sql
+-- Kịch bản: sort_lon (sắp xếp bảng lớn)
+SELECT * FROM tpch.lineitem ORDER BY l_comment;
 ```
 
-## Tham khảo
+## Chạy không dùng Docker (cho người phát triển)
 
-- Zhou và cộng sự, D-Bot: Database Diagnosis System using Large Language Models, arXiv 2312.01454.
-- TPC-H Benchmark: https://www.tpc.org/tpch/
-- tpch-kit (dbgen): https://github.com/gregrahn/tpch-kit
-- Repo gốc: https://github.com/TsinghuaDatabaseGroup/DB-GPT
+Cần PostgreSQL 16 trở lên có `pg_stat_statements`, và Python 3.11.
+
+```bash
+psql -U dbot -d dbot_demo -f db/init/01_init.sql
+PGHOST=localhost PGUSER=dbot PGPASSWORD=dbot PGDATABASE=dbot_demo DBGEN_DIR=/duong/dan/dbgen sh seed/seed.sh
+pip install -r requirements.txt -r requirements-worker.txt
+export PG_HOST=localhost LLM_PROVIDER=mock SQLITE_PATH=data/dbot.sqlite
+uvicorn app.backend:app --port 8000 &
+python -m app.monitor &
+python -m app.worker &
+streamlit run app/ui/streamlit_app.py
+```
+
+## Xử lý lỗi thường gặp
+
+- Trang báo "Không gọi được backend": chờ thêm vì `tpch-seed` có thể chưa xong. Xem `docker compose logs tpch-seed`.
+- Báo cáo ghi "Ollama lỗi": kiểm tra `ollama list` có `qwen2.5:7b`. Trên Linux, kiểm tra `OLLAMA_HOST=0.0.0.0`.
+- Phân tích rất chậm: model 7B trên CPU mất 1 đến 3 phút mỗi alert. Dùng API key hoặc model nhỏ hơn như `qwen2.5:3b`.
+- Cổng 5432 hoặc 8501 đã bị dùng: đổi `PG_PORT_HOST` hoặc `UI_PORT` trong `.env`.
+- Muốn sinh lại dữ liệu: `docker compose down -v` rồi `docker compose up --build -d`.
+- Alert không tự hết sau `table_bloat`: chạy kịch bản `fix_vacuum`.
+- Thử luồng mà không cần LLM: đặt `LLM_PROVIDER=mock` trong `.env`.
+
+## Hạn chế
+
+- Luật phát hiện dựa trên ngưỡng cố định, đôi khi báo trùng.
+- Monitor không đo CPU của máy. Alert CPU được suy ra từ phiên đang chạy mà không phải chờ.
+- Tab 4 chỉ chỉnh tham số ở mức phiên và tạo index. `shared_buffers` cần khởi động lại nên không đưa vào.
+- Tab 4 xóa mọi index phụ trên `lineitem`, `orders`, `customer`, `part` trước và sau mỗi lần đo.
+
+## Ghi công
+
+- Bài báo D-Bot: Zhou và cộng sự, arXiv 2312.01454. Repo gốc: TsinghuaDatabaseGroup/DB-GPT.
+- λ-Tune: Giannakouris và Trummer.
+- Dự án "LLM As DBA" của Nhóm 3: luồng trình diễn tab 1 đến 4, prompt A và B, thẻ kinh nghiệm, chấm điểm tự động và Mini λ-Tune.
+- Dữ liệu TPC-H sinh bằng tpch-kit (gregrahn/tpch-kit).
+
+Báo cáo tổng hợp: `docs/bao-cao-dbot-demo.docx`.
