@@ -1,251 +1,157 @@
-# D-Bot Light — realtime database diagnosis with CrewAI
+# D-Bot Demo: bảng theo dõi sự cố PostgreSQL có AI hỗ trợ
 
-D-Bot Light là bản demo một máy lấy cảm hứng từ paper **LLM As DBA / D-Bot** và repo `TsinghuaDatabaseGroup/DB-GPT`. Nó minh họa hai luồng:
+Đây là bản demo để học, dựng lại ở mức nhẹ ý tưởng của bài báo D-Bot
+(arXiv 2312.01454). Hệ thống gây sự cố thật trên PostgreSQL, phát hiện bất thường,
+rồi nhờ một LLM chạy trên máy bạn phân tích nguyên nhân và đề xuất cách xử lý.
 
-```text
-Realtime: scenario/workload → PostgreSQL → Prometheus → Alertmanager → D-Bot webhook
-User chat: incident → hỏi tự nhiên → D-Bot dùng incident context để giải thích/điều tra thêm
-```
+AI chỉ đề xuất. AI không tự chạy lệnh sửa lỗi trên database.
 
-D-Bot không tự sửa database. Các action như tạo index, VACUUM hoặc terminate session chỉ là recommendation và luôn yêu cầu human approval.
+## Thành phần
 
-## Chạy nhanh nhất
+| Container | Việc làm |
+|---|---|
+| postgres | PostgreSQL 16, bật pg_stat_statements, chứa dữ liệu TPC-H trong schema tpch |
+| tpch-seed | Chạy một lần: build dbgen, sinh dữ liệu TPC-H SF 0.1 rồi nạp vào PostgreSQL |
+| monitor | Cứ 10 giây đọc thống kê của PostgreSQL, tạo alert, tự đóng alert khi hết sự cố |
+| backend | FastAPI, phục vụ trang web, API, WebSocket, chạy và dừng kịch bản |
+| dbot-worker | D-Bot dùng CrewAI với 2 agent: Chẩn đoán và Báo cáo |
 
-### Bước 1 — Chuẩn bị
+Ollama không chạy trong Docker. Ollama chạy trực tiếp trên máy bạn.
 
-Cài Docker Desktop hoặc Docker Engine + Compose v2. Không cần Python và không cần API key nếu dùng mock mode.
+## Dữ liệu demo: TPC-H scale factor 0.1
+
+Demo dùng bộ dữ liệu chuẩn TPC-H với scale factor 0.1 (khoảng 100 MB).
+Có 8 bảng: region, nation, part, supplier, partsupp, customer, orders, lineitem.
+Bảng lớn nhất là lineitem với khoảng 600 nghìn dòng.
+
+Dữ liệu không nằm trong repo. Khi chạy `docker compose up`, container tpch-seed sẽ:
+
+1. Tải và build công cụ dbgen từ https://github.com/gregrahn/tpch-kit.
+2. Chạy `dbgen -s 0.1` để sinh các file .tbl.
+3. Nạp các file vào PostgreSQL bằng lệnh COPY, rồi chạy ANALYZE.
+
+Các bảng chỉ có khóa chính. Cố ý không có index phụ như l_partkey hay o_custkey,
+để kịch bản thiếu index có tác dụng. Nếu dữ liệu đã có, tpch-seed sẽ bỏ qua bước nạp.
+Muốn đổi kích thước, sửa `TPCH_SF` trong file .env trước khi chạy lần đầu.
+
+## 1. Chuẩn bị
+
+1. Cài Docker Desktop (Windows, macOS) hoặc Docker Engine có Compose (Linux).
+2. Cài Ollama tại https://ollama.com.
+3. Tải model. Lệnh này tải khoảng 4,7 GB:
 
 ```bash
-git clone https://github.com/nguyenlytruongsonex1-ops/dbot-demo.git
+ollama pull qwen2.5:7b
+```
+
+4. Kiểm tra Ollama đang chạy:
+
+```bash
+curl http://localhost:11434/api/tags
+```
+
+Trên Linux, Ollama mặc định chỉ nghe ở 127.0.0.1. Container không gọi tới được.
+Hãy cho Ollama nghe ở mọi địa chỉ:
+
+```bash
+sudo systemctl edit ollama
+# thêm 2 dòng sau rồi lưu:
+# [Service]
+# Environment="OLLAMA_HOST=0.0.0.0"
+sudo systemctl restart ollama
+```
+
+## 2. Chạy hệ thống
+
+```bash
+git clone -b feature/dbot-demo https://github.com/nguyenlytruongsonex1-ops/dbot-demo.git
 cd dbot-demo
 cp .env.example .env
-```
-
-### Bước 2 — Khởi động
-
-```bash
 docker compose up --build -d
 ```
 
-Chờ khoảng 30–60 giây, sau đó mở:
+Lần đầu mất vài phút vì phải tải image và cài CrewAI.
+Bước sinh và nạp dữ liệu TPC-H mất khoảng 10 đến 30 giây. Xem tiến độ: `docker compose logs tpch-seed`.
 
-- D-Bot UI: <http://localhost:8000>
-- Prometheus: <http://localhost:9090>
-- Alertmanager: <http://localhost:9093>
+Mở trình duyệt: http://localhost:8000
 
-Kiểm tra service:
-
-```bash
-curl http://localhost:8000/health
-```
-
-### Bước 3 — Test realtime + chat
-
-1. Mở <http://localhost:8000>.
-2. Ở cột **Trigger demo workload**, bấm `lock_contention` hoặc `slow_query`.
-3. Prometheus sẽ evaluate rule sau vài giây.
-4. Alertmanager gửi alert tới D-Bot webhook.
-5. Incident xuất hiện trong UI.
-6. Chọn incident và hỏi:
-
-```text
-Session nào đang block?
-Có chắc là do thiếu index không?
-Có nên terminate blocker không?
-```
-
-7. Bấm **Clear all scenarios** để dọn trạng thái demo.
-
-### Bước 4 — Xem log realtime
+Xem log nếu cần:
 
 ```bash
-docker compose logs -f dbot alertmanager prometheus
+docker compose logs -f monitor dbot-worker
 ```
 
-### Dừng và reset
+## 3. Chạy thử một kịch bản
 
-```bash
-docker compose down
+1. Ở cột "Kịch bản sự cố", bấm Chạy ở dòng missing_index.
+2. Chờ 10 đến 20 giây. Một alert mới hiện ra ở bảng bên trái.
+3. Bấm "Nhờ AI phân tích". Trạng thái chuyển sang "đang phân tích".
+4. Khi xong, bấm vào tên alert để xem chi tiết: tóm tắt, các bước suy luận, nguyên nhân, phương án xử lý.
+5. Bấm Dừng ở kịch bản. Sau 3 lần quét không còn dấu hiệu (khoảng 30 đến 40 giây), alert tự chuyển sang "đã giải quyết".
+
+## 4. Các kịch bản có sẵn
+
+| Kịch bản | Sự cố | Ghi chú |
+|---|---|---|
+| cpu_high | Truy vấn tổng hợp kiểu TPC-H Q1 lặp 50 lần trên lineitem, CPU cao | Chạy 1 đến 3 phút |
+| missing_index | Tìm lineitem theo l_partkey (không có index) 10000 lần | Chạy vài phút |
+| lock_holder | Giữ khóa đơn hàng o_orderkey = 1 trong 120 giây | Chạy trước lock_waiter |
+| lock_waiter | Cập nhật cùng dòng, bị kẹt | Chạy sau lock_holder |
+| idle_in_transaction | Transaction mở 90 giây không commit | |
+| table_bloat | Tắt autovacuum, update toàn bảng lineitem 3 lần | Alert chỉ hết sau khi chạy fix_vacuum |
+| fix_vacuum | Dọn dẹp sau table_bloat | Không phải sự cố |
+
+Mỗi file trong thư mục scenarios/ có phần comment đầu file giải thích sự cố,
+dấu hiệu mong đợi và cách xử lý.
+
+## 5. Thêm kịch bản mới
+
+Cách 1: trên trang web, ở mục "Thêm kịch bản", nhập tên (chữ thường, số, dấu gạch dưới)
+và chọn file .sql rồi bấm Tải lên.
+
+Cách 2: chép file .sql vào thư mục scenarios/. Trang web sẽ thấy ngay.
+
+Lưu ý:
+- Mỗi kịch bản chạy một lần, trên một kết nối, từng câu lệnh theo thứ tự.
+- Kịch bản chạy bằng user scenario_runner, chỉ có quyền trên schema tpch.
+- Mỗi câu lệnh bị giới hạn 10 phút.
+- Nên viết vài dòng comment bắt đầu bằng -- ở đầu file để mô tả kịch bản.
+
+## 6. Đổi model hoặc dùng API khác
+
+Sửa file .env rồi chạy lại `docker compose up -d`:
+
+- Đổi model Ollama: `OLLAMA_MODEL=llama3.1:8b`
+- Dùng API tương thích OpenAI: `LLM_PROVIDER=openai`, điền `OPENAI_API_KEY`.
+- Thử luồng mà không cần LLM: `LLM_PROVIDER=mock`. D-Bot vẫn gọi công cụ thật trên DB
+  nhưng kết luận theo luật viết sẵn.
+
+## 7. Xử lý sự cố thường gặp
+
+| Hiện tượng | Cách xử lý |
+|---|---|
+| Phân tích báo lỗi Connection error | Kiểm tra Ollama đang chạy và nghe ở 0.0.0.0 (xem mục 1) |
+| Phân tích rất lâu | Model 7B trên CPU mất 1 đến 3 phút. Thử model nhỏ hơn như qwen2.5:3b |
+| Cổng 5432 hoặc 8000 bị chiếm | Tắt PostgreSQL cũ trên máy, hoặc đổi APP_PORT trong .env |
+| Không thấy alert | Chờ ít nhất 2 lần quét (20 giây). Xem `docker compose logs monitor` |
+| tpch-seed báo lỗi khi build | Kiểm tra mạng (cần tải tpch-kit từ GitHub), rồi chạy lại `docker compose up --build -d` |
+| Muốn làm lại từ đầu | `docker compose down -v` rồi `docker compose up --build -d` |
+
+## 8. Cấu trúc thư mục
+
+```
+app/            mã nguồn: monitor, backend, worker, D-Bot, giao diện web
+db/init/        SQL tạo schema TPC-H và user cho kịch bản
+seed/           Dockerfile và script sinh, nạp dữ liệu TPC-H
+scenarios/      các file kịch bản sự cố
+knowledge/      tri thức chẩn đoán dạng markdown cho D-Bot tra cứu
+docs/           báo cáo tổng hợp (docx) và hình kiến trúc
+tests/          kiểm thử nhỏ
 ```
 
-Xóa cả database/metrics volumes để chạy lại từ đầu:
+## Tham khảo
 
-```bash
-docker compose down -v
-```
-
-## Các scenario
-
-| Scenario | Trigger | Alert | D-Bot tools chính |
-|---|---|---|---|
-| `slow_query` | Tạo tín hiệu latency cao và reset query stats | `PostgresHighQueryLatency` | `get_slow_queries`, `get_indexes`, `get_active_sessions` |
-| `lock_contention` | Session A giữ lock trên `accounts.id=1` | `PostgresBlockedSessions` | `get_locks`, `get_active_sessions` |
-| `workload_contention` | Tạo tín hiệu 12 active sessions | `PostgresWorkloadContention` | `get_active_sessions`, `get_system_metrics`, `get_slow_queries` |
-| `table_bloat` | Update nhiều rows rồi `ANALYZE` | `PostgresDeadTupleRatioHigh` | `get_table_statistics` |
-| `execution_error` | Chạy query tham chiếu cột không tồn tại | `PostgresExecutionErrors` | evidence từ incident + sessions |
-
-Các trigger là workload/anomaly **chỉ dành cho database demo**. Trong môi trường thật, application workload tạo anomaly và D-Bot chỉ quan sát/chẩn đoán.
-
-## Chạy bằng CLI
-
-Trigger scenario:
-
-```bash
-docker compose exec dbot python -m scenarios.run trigger lock_contention
-```
-
-Xem state:
-
-```bash
-docker compose exec dbot python -m scenarios.run state
-```
-
-Clear:
-
-```bash
-docker compose exec dbot python -m scenarios.run clear
-```
-
-Chạy diagnosis thủ công, không cần chờ alert:
-
-```bash
-curl -X POST http://localhost:8000/api/diagnose \
-  -H 'content-type: application/json' \
-  -d '{"scenario":"slow_query","prepare":true}'
-```
-
-Xem incidents:
-
-```bash
-curl http://localhost:8000/api/incidents
-```
-
-Gửi user chat vào incident:
-
-```bash
-curl -X POST http://localhost:8000/api/incidents/<INCIDENT_ID>/chat \
-  -H 'content-type: application/json' \
-  -d '{"message":"Có chắc là do thiếu index không?"}'
-```
-
-## CrewAI và LLM mode
-
-### Mock mode mặc định
-
-`.env` mặc định:
-
-```dotenv
-LLM_MODE=mock
-```
-
-Mock mode vẫn chạy đủ topology:
-
-- Chief DBA;
-- CPU/Workload Agent;
-- Memory/Database Agent;
-- database tools;
-- diagnosis report;
-- realtime webhook;
-- user chat.
-
-Phần kết luận dùng evidence rules để demo nhanh, tái lập và không tốn API cost.
-
-### OpenAI-compatible mode
-
-Để dùng CrewAI và LLM chat thật:
-
-```dotenv
-LLM_MODE=openai
-OPENAI_API_KEY=your-key
-OPENAI_MODEL_NAME=gpt-4o-mini
-```
-
-Nếu dùng local OpenAI-compatible server:
-
-```dotenv
-OPENAI_API_BASE=http://host.docker.internal:1234/v1
-```
-
-Khởi động lại:
-
-```bash
-docker compose up --build -d
-```
-
-## Kiến trúc
-
-```text
-┌──────────────┐     ┌──────────────┐     ┌───────────────┐
-│ PostgreSQL   │────►│ D-Bot /metrics│────►│ Prometheus    │
-└──────┬───────┘     └──────┬───────┘     └──────┬────────┘
-       │                    │                    ▼
-       │                    │             ┌───────────────┐
-       │                    └────────────►│ Alertmanager  │
-       │                                  └──────┬────────┘
-       │                                         │ webhook
-       ▼                                         ▼
-┌─────────────────────────────────────────────────────────┐
-│ D-Bot FastAPI                                           │
-│ incident store → CrewAI agents → evidence report → chat │
-└─────────────────────────────────────────────────────────┘
-```
-
-### Services
-
-- `postgres`: database demo, `pg_stat_statements`, sample tables.
-- `dbot`: FastAPI, UI, Prometheus exporter, CrewAI, tools, incident store.
-- `prometheus`: scrape `/metrics` và evaluate alert rules.
-- `alertmanager`: group/deduplicate `firing/resolved` alerts và POST webhook.
-
-## API chính
-
-- `GET /health`
-- `GET /metrics`
-- `GET /api/scenarios`
-- `POST /api/scenarios/{name}/trigger`
-- `POST /api/scenarios/clear`
-- `POST /api/diagnose`
-- `GET /api/incidents`
-- `GET /api/incidents/{id}`
-- `POST /api/incidents/{id}/chat`
-- `POST /webhooks/alertmanager`
-- `GET /api/tools`
-
-## Test local source
-
-Nếu máy đã có Python:
-
-```bash
-python3 -m venv .venv
-. .venv/bin/activate
-pip install -e .
-pytest -q
-python -m compileall -q app scenarios tests
-```
-
-Test container:
-
-```bash
-docker compose config
-curl -fsS http://localhost:8000/health
-curl -fsS http://localhost:8000/metrics
-```
-
-## Safety
-
-Chỉ chạy artifact với database demo. D-Bot Light mặc định dùng read-only diagnostic tools. Scenario runner có thể tạo lock, update rows và trạng thái demo. Không trỏ Compose này vào database production.
-
-## Giới hạn có chủ ý
-
-Đây là **minimal D-Bot reconstruction**, không phải production DBA. Bản Light chưa có vector database, Kubernetes, fine-tuning, distributed tracing, hoặc auto-remediation. Realtime detection dùng Prometheus rules; D-Bot vẫn cần database tools để xác minh root cause.
-
-## Tài liệu
-
-- `docs/d-bot-paper-notes.md` — mapping với paper.
-- `docs/testing.md` — test và demo flow.
-- `docs/light-version.md` — kiến trúc light version.
-- `data/experiences.json` — maintenance experience seed.
-
-## License
-
-MIT.
+- Zhou và cộng sự, D-Bot: Database Diagnosis System using Large Language Models, arXiv 2312.01454.
+- TPC-H Benchmark: https://www.tpc.org/tpch/
+- tpch-kit (dbgen): https://github.com/gregrahn/tpch-kit
+- Repo gốc: https://github.com/TsinghuaDatabaseGroup/DB-GPT

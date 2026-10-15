@@ -1,0 +1,24 @@
+digraph G {
+  rankdir=LR; node [fontname="DejaVu Sans", shape=box, style="rounded,filled", fillcolor="#eef3f8"]; edge [fontname="DejaVu Sans", fontsize=10]; fontname="DejaVu Sans";
+  subgraph cluster_docker { label="Docker Compose"; style=dashed;
+    seed [label="tpch-seed\n(dbgen -s 0.1, COPY)", fillcolor="#fdf2d0"];
+    pg [label="PostgreSQL 16\n(pg_stat_statements,\ndữ liệu TPC-H SF 0.1)", shape=cylinder, fillcolor="#dbe9d8"];
+    mon [label="monitor\n(quét mỗi 10 giây)"];
+    be [label="backend FastAPI\n(API, WebSocket,\nchạy kịch bản)"];
+    wk [label="dbot-worker\n(CrewAI: Chẩn đoán,\nBáo cáo)"];
+    sq [label="SQLite\n(alert, báo cáo)", shape=cylinder, fillcolor="#f6ecd5"];
+    kb [label="knowledge/*.md\n(tri thức chẩn đoán)", shape=note, style=filled, fillcolor="white"];
+  }
+  ui [label="Trình duyệt DBA\n(bảng theo dõi)", fillcolor="#f8e1e1"];
+  ol [label="Ollama trên máy người dùng\n(qwen2.5:7b)", fillcolor="#e6e0f4"];
+  seed -> pg [label="nạp dữ liệu một lần"];
+  be -> pg [label="chạy/dừng kịch bản"];
+  mon -> pg [label="đọc thống kê"];
+  mon -> sq [label="ghi alert"];
+  ui -> be [label="HTTP, WebSocket", dir=both];
+  be -> sq [dir=both];
+  wk -> sq [label="nhận việc, lưu báo cáo", dir=both];
+  wk -> pg [label="công cụ chỉ đọc"];
+  wk -> kb;
+  wk -> ol [label="host.docker.internal:11434"];
+}

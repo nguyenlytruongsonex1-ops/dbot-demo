@@ -1,255 +1,193 @@
-from datetime import date
-from pathlib import Path
+"""Tạo báo cáo docs/bao-cao-dbot-demo.docx bằng python-docx.
+Chạy: python docs/build_report.py"""
+import os
 from docx import Document
-from docx.enum.section import WD_SECTION
-from docx.enum.table import WD_TABLE_ALIGNMENT, WD_CELL_VERTICAL_ALIGNMENT
 from docx.enum.text import WD_ALIGN_PARAGRAPH
-from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
-from docx.shared import Inches, Pt, RGBColor
+from docx.shared import Cm, Pt
 
-OUT = Path(__file__).parent / "DBot_Light_Bao_cao_tong_hop.docx"
+HERE = os.path.dirname(os.path.abspath(__file__))
+REPO = "https://github.com/nguyenlytruongsonex1-ops/dbot-demo/tree/feature/dbot-demo"
 
+doc = Document()
+for s in doc.sections:
+    s.top_margin = s.bottom_margin = Cm(2)
+    s.left_margin, s.right_margin = Cm(3), Cm(2)
 
-def shade(cell, fill):
-    tcPr = cell._tc.get_or_add_tcPr()
-    shd = tcPr.find(qn("w:shd"))
-    if shd is None:
-        shd = OxmlElement("w:shd")
-        tcPr.append(shd)
-    shd.set(qn("w:fill"), fill)
+st = doc.styles["Normal"]
+st.font.name = "Times New Roman"; st.font.size = Pt(13)
+st.element.rPr.rFonts.set(qn("w:eastAsia"), "Times New Roman")
+st.paragraph_format.space_after = Pt(6); st.paragraph_format.line_spacing = 1.3
+for name, size in (("Title", 18), ("Heading 1", 15), ("Heading 2", 13)):
+    h = doc.styles[name]; h.font.name = "Times New Roman"; h.font.size = Pt(size)
+    h.font.bold = name != "Title"; h.font.color.rgb = None
+    h.element.rPr.rFonts.set(qn("w:eastAsia"), "Times New Roman")
+    h.element.rPr.rFonts.set(qn("w:ascii"), "Times New Roman")
+    h.element.rPr.rFonts.set(qn("w:hAnsi"), "Times New Roman")
 
-
-def set_cell_text(cell, text, bold=False, color=None):
-    cell.text = ""
-    p = cell.paragraphs[0]
-    p.paragraph_format.space_after = Pt(2)
-    r = p.add_run(str(text))
-    r.bold = bold
-    r.font.size = Pt(9.5)
-    if color:
-        r.font.color.rgb = RGBColor.from_string(color)
-    cell.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER
-
-
-def add_table(doc, headers, rows, widths=None):
-    table = doc.add_table(rows=1, cols=len(headers))
-    table.alignment = WD_TABLE_ALIGNMENT.CENTER
-    table.style = "Table Grid"
-    for i, header in enumerate(headers):
-        set_cell_text(table.rows[0].cells[i], header, bold=True, color="FFFFFF")
-        shade(table.rows[0].cells[i], "1F4E79")
-    for row in rows:
-        cells = table.add_row().cells
-        for i, value in enumerate(row):
-            set_cell_text(cells[i], value)
-            if len(table.rows) % 2 == 0:
-                shade(cells[i], "EAF2F8")
-    if widths:
-        for row in table.rows:
-            for i, width in enumerate(widths):
-                row.cells[i].width = Inches(width)
-    doc.add_paragraph().paragraph_format.space_after = Pt(2)
-    return table
-
-
-def add_page_field(paragraph):
-    run = paragraph.add_run("Trang ")
-    run.font.size = Pt(9)
-    fld = OxmlElement("w:fldSimple")
-    fld.set(qn("w:instr"), "PAGE")
-    run._r.addnext(fld)
-
-
-def setup(doc):
-    sec = doc.sections[0]
-    sec.top_margin = Inches(0.7)
-    sec.bottom_margin = Inches(0.65)
-    sec.left_margin = Inches(0.8)
-    sec.right_margin = Inches(0.8)
-    styles = doc.styles
-    normal = styles["Normal"]
-    normal.font.name = "Arial"
-    normal._element.rPr.rFonts.set(qn("w:eastAsia"), "Arial")
-    normal.font.size = Pt(10.5)
-    normal.paragraph_format.space_after = Pt(6)
-    normal.paragraph_format.line_spacing = 1.12
-    for name, size, color in [("Title", 24, "1F4E79"), ("Heading 1", 16, "1F4E79"), ("Heading 2", 12.5, "2F5597")]:
-        style = styles[name]
-        style.font.name = "Arial"
-        style._element.rPr.rFonts.set(qn("w:eastAsia"), "Arial")
-        style.font.size = Pt(size)
-        style.font.color.rgb = RGBColor.from_string(color)
-        style.font.bold = True
-    footer = sec.footer.paragraphs[0]
-    footer.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    add_page_field(footer)
-
-
-def p(doc, text="", bold_prefix=None):
+def p(text, align=None, italic=False):
     para = doc.add_paragraph()
-    if bold_prefix and text.startswith(bold_prefix):
-        para.add_run(bold_prefix).bold = True
-        para.add_run(text[len(bold_prefix):])
-    else:
-        para.add_run(text)
+    r = para.add_run(text); r.italic = italic
+    if align: para.alignment = align
+    else: para.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
     return para
 
+def bullet(text):
+    doc.add_paragraph(text, style="List Bullet")
 
-def bullets(doc, items):
-    for item in items:
-        para = doc.add_paragraph(style="List Bullet")
-        para.add_run(item)
+def caption(text):
+    p(text, WD_ALIGN_PARAGRAPH.CENTER, italic=True)
 
-
-def main():
-    doc = Document()
-    setup(doc)
-
-    title = doc.add_paragraph(style="Title")
-    title.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    title.add_run("BÁO CÁO TỔNG HỢP\nTÁI DỰNG D-BOT LIGHT")
-    sub = doc.add_paragraph()
-    sub.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    r = sub.add_run("Realtime database diagnosis với CrewAI, Prometheus và PostgreSQL")
-    r.font.size = Pt(14)
-    r.font.color.rgb = RGBColor.from_string("4F6B8A")
+def table(header, rows, cap, widths=None):
+    caption(cap)
+    t = doc.add_table(rows=1, cols=len(header)); t.style = "Table Grid"
+    for i, h in enumerate(header):
+        t.rows[0].cells[i].text = h
+    for r in rows:
+        cells = t.add_row().cells
+        for i, v in enumerate(r):
+            cells[i].text = v
+    for row in t.rows:
+        for i, c in enumerate(row.cells):
+            for para in c.paragraphs:
+                para.paragraph_format.space_after = Pt(2)
+                for run in para.runs: run.font.size = Pt(11)
+            if widths: c.width = Cm(widths[i])
     doc.add_paragraph()
-    meta = doc.add_paragraph()
-    meta.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    meta.add_run("Phiên bản demo: 0.2.0\n").bold = True
-    meta.add_run("Ngày lập báo cáo: 14/10/2026\n")
-    meta.add_run("Repository: github.com/nguyenlytruongsonex1-ops/dbot-demo")
-    doc.add_paragraph()
-    callout = doc.add_table(rows=1, cols=1)
-    callout.style = "Table Grid"
-    cell = callout.cell(0, 0)
-    shade(cell, "EAF2F8")
-    set_cell_text(cell, "Kết luận: Bản tái dựng đã chuyển demo từ quy trình bấm thủ công sang mô hình D-Bot Light có alert realtime, webhook, diagnosis bằng CrewAI và chat theo incident. Đây là bản proof-of-concept chạy một máy, chưa phải hệ thống DBA production.", bold=True)
-    doc.add_page_break()
 
-    doc.add_heading("1. Mục tiêu và phạm vi", level=1)
-    p(doc, "Mục tiêu của bản tái dựng là tạo một phiên bản gọn, dễ chạy trên máy cá nhân nhưng vẫn giữ các ý tưởng quan trọng của D-Bot trong paper LLM As DBA và repository DB-GPT của nhóm Tsinghua.")
-    p(doc, "Bản Light tập trung vào hai luồng bổ trợ. Luồng realtime nhận biết tín hiệu bất thường và tạo incident. Luồng user chat cho phép người dùng hỏi sâu, yêu cầu kiểm tra thêm, hiểu rủi ro và phê duyệt hành động.")
-    add_table(doc, ["Trong phạm vi", "Ngoài phạm vi bản Light"], [
-        ("PostgreSQL 16, Prometheus, Alertmanager, FastAPI, CrewAI", "Kubernetes, Kafka, distributed tracing"),
-        ("5 scenario anomaly có thể tái lập", "Fine-tuning và local LLM nhiều GB"),
-        ("Read-only evidence tools và report JSON", "Tự động sửa database production"),
-        ("Mock mode không cần API key; OpenAI-compatible mode tùy chọn", "Triển khai HA hoặc multi-cluster")
-    ], [3.1, 3.1])
+H = doc.add_heading
+p("Mã nguồn: " + REPO, WD_ALIGN_PARAGRAPH.LEFT)
+doc.add_paragraph("Báo cáo tổng hợp: Demo hệ thống chẩn đoán sự cố cơ sở dữ liệu dựa trên D-Bot", style="Title").alignment = WD_ALIGN_PARAGRAPH.CENTER
+p("Tài liệu học tập. Thực hiện: Nguyễn Lý Trường Sơn. Ngày 15/10/2026.", WD_ALIGN_PARAGRAPH.CENTER)
 
-    doc.add_heading("2. Repo gốc và cơ sở tái dựng", level=1)
-    p(doc, "Paper LLM As DBA mô tả D-Bot gồm hai giai đoạn. Giai đoạn chuẩn bị chuyển tài liệu thành maintenance experience và tạo prompt template. Giai đoạn bảo trì nhận anomaly, thu thập metrics, chọn tool, phân tích root cause bằng tree-of-thought và phối hợp nhiều LLM agent.")
-    p(doc, "Repository gốc TsinghuaDatabaseGroup/DB-GPT phát triển các ý tưởng này thành một hệ thống lớn hơn với knowledge base, document-to-knowledge, multiagents, anomaly triggers, Prometheus/Alertmanager, diagnostic files, web UI và user feedback.")
-    add_table(doc, ["Ý tưởng repo gốc", "Cách tái dựng trong bản Light"], [
-        ("Prometheus + Alertmanager", "Giữ nguyên mô hình; dùng 4 container chính"),
-        ("Anomaly trigger scripts", "Có API/UI/CLI trigger scenario an toàn cho database demo"),
-        ("Multi-agent diagnosis", "CrewAI Chief DBA, Workload Agent, Memory/Database Agent"),
-        ("Knowledge base", "Experience JSON + retrieval nhẹ; không dùng vector DB riêng"),
-        ("Diagnostic files/reports", "Incident store JSON và report history"),
-        ("Frontend diagnosis", "Dashboard local có incident list, evidence và chat")
-    ], [3.1, 3.1])
+H("1. Giới thiệu và mục tiêu", 1)
+p("Quản trị cơ sở dữ liệu cần nhiều kinh nghiệm. Khi có sự cố, người quản trị (DBA) phải đọc nhiều số liệu, đoán nguyên nhân và chọn cách xử lý. Bài báo D-Bot đề xuất dùng mô hình ngôn ngữ lớn (LLM) để hỗ trợ việc này.")
+p("Báo cáo này trình bày một bản demo nhỏ, dựng lại ý tưởng của D-Bot ở mức nhẹ. Mục tiêu là học cách một hệ thống như vậy hoạt động. Đây không phải công trình nghiên cứu và không nhằm so sánh với kết quả của bài báo.")
+p("Bản demo có bốn mục tiêu cụ thể:")
+bullet("Gây ra các sự cố thật trên PostgreSQL bằng các file SQL kịch bản.")
+bullet("Tự phát hiện bất thường và hiện cảnh báo (alert) theo thời gian thực trên một trang web.")
+bullet("Cho phép DBA bấm nút để AI phân tích, xem từng bước suy luận và phương án xử lý.")
+bullet("Chạy được trên máy cá nhân bằng Docker, dùng LLM chạy cục bộ qua Ollama.")
 
-    doc.add_heading("3. Kiến trúc bản tái dựng", level=1)
-    p(doc, "Kiến trúc được thiết kế để mỗi thành phần có một trách nhiệm rõ ràng. Scenario runner chỉ tạo sự cố phục vụ demo. PostgreSQL là nơi phát sinh trạng thái. Prometheus scrape metrics và đánh giá rule. Alertmanager gửi webhook. D-Bot thu thập evidence và điều phối CrewAI.")
-    doc.add_paragraph("Scenario/API → PostgreSQL → D-Bot /metrics → Prometheus → Alertmanager → D-Bot /webhooks/alertmanager → Incident store → CrewAI → Report + User chat", style="Intense Quote")
-    add_table(doc, ["Service/module", "Chức năng"], [
-        ("postgres", "Database demo, sample tables, pg_stat_statements và system views"),
-        ("dbot", "FastAPI, UI, metrics exporter, incident store, CrewAI và read-only tools"),
-        ("prometheus", "Scrape /metrics mỗi 5 giây và đánh giá alert rules"),
-        ("alertmanager", "Group/deduplicate alert firing/resolved và POST webhook"),
-        ("scenario runner", "Trigger/clear anomaly phục vụ kiểm thử local; không dùng cho production")
-    ], [1.6, 4.6])
-    p(doc, "User chat được gắn với từng incident. Người dùng không cần biết SQL; UI hiển thị summary, evidence, root cause sơ bộ và các câu hỏi tự nhiên như ‘Có chắc là do thiếu index không?’ hoặc ‘Session nào đang block?’.")
+H("2. Tóm tắt bài báo gốc", 1)
+p("Bài báo D-Bot: Database Diagnosis System using Large Language Models (Zhou và cộng sự, arXiv 2312.01454, nhóm Cơ sở dữ liệu Đại học Thanh Hoa) xây dựng một hệ thống chẩn đoán sự cố cho PostgreSQL. Hệ thống gồm các phần chính sau.")
+bullet("Trích xuất tri thức chẩn đoán từ tài liệu kỹ thuật, lưu thành các mẩu tri thức có cấu trúc.")
+bullet("Bộ công cụ cho LLM gọi, ví dụ xem số liệu giám sát, xem câu lệnh chậm, gợi ý index.")
+bullet("Suy luận theo cây (tree search) để thử nhiều hướng và quay lui khi hướng hiện tại không hợp lý.")
+bullet("Nhiều agent chuyên môn phối hợp, mỗi agent phụ trách một nhóm sự cố như CPU, bộ nhớ, khóa.")
+p("Bài báo dùng GPT-4 và một hệ thống giám sát đầy đủ với Prometheus. Theo bài báo, D-Bot cho kết quả chẩn đoán tốt hơn các phương pháp dựa trên luật và các LLM không có công cụ. Hệ thống gốc khá nặng để dựng lại trên máy cá nhân, nên bản demo chỉ giữ lại ý tưởng chính.")
 
-    doc.add_heading("4. Bộ kịch bản kiểm thử", level=1)
-    add_table(doc, ["ID", "Scenario", "Realtime trigger", "Tool/evidence chính", "Kết quả mong đợi"], [
-        ("RT-01", "Slow query / missing index", "Latency signal > 500 ms", "pg_stat_statements, EXPLAIN, pg_indexes", "Nhận diện Seq Scan và đề xuất candidate index"),
-        ("RT-02", "Lock contention", "Blocked session > 0", "pg_locks, pg_stat_activity", "Xác định blocker/waiter và yêu cầu approval"),
-        ("RT-03", "CPU/workload contention", "Active-session signal > 8", "Sessions, system metrics, slow queries", "Phân biệt workload, CPU và lock pressure"),
-        ("RT-04", "Table bloat", "Dead tuple ratio > 0.02", "pg_stat_user_tables", "Đề xuất VACUUM/ANALYZE và maintenance window"),
-        ("RT-05", "Execution error", "Error signal > 0", "Incident context và database state", "Phân loại lỗi và đề xuất sửa an toàn")
-    ], [0.45, 1.35, 1.55, 1.65, 1.8])
-    p(doc, "Trong môi trường thật, application workload hoặc batch job tạo anomaly. Scenario runner chỉ tồn tại để tạo tín hiệu lặp lại trong demo. D-Bot không tự tạo workload production.")
+H("3. Kiến trúc hệ thống", 1)
+p("Hệ thống gồm năm container trong Docker Compose và một dịch vụ Ollama chạy trên máy người dùng. Hình 1 mô tả các thành phần và luồng dữ liệu.")
+doc.add_picture(os.path.join(HERE, "kien-truc.png"), width=Cm(16))
+doc.paragraphs[-1].alignment = WD_ALIGN_PARAGRAPH.CENTER
+caption("Hình 1. Kiến trúc tổng thể của bản demo")
+p("So với bài báo gốc, bản demo đơn giản hóa như sau. Monitor đọc thẳng các view thống kê của PostgreSQL thay vì dùng Prometheus. Chỉ có hai agent thay vì nhiều agent chuyên môn. Tri thức để trong vài file văn bản, tìm theo từ khóa. LLM là một mô hình nhỏ chạy cục bộ thay cho GPT-4.")
 
-    doc.add_heading("5. Luồng realtime và user chat", level=1)
-    p(doc, "Realtime detection và user chat không thay thế nhau. Realtime trả lời ‘có vấn đề gì và bắt đầu lúc nào’. Chat trả lời ‘vì sao, cần kiểm tra gì thêm, rủi ro ra sao và có nên thực hiện action không’.")
-    add_table(doc, ["Bước", "Realtime", "User chat"], [
-        ("1", "Prometheus phát hiện metric vượt rule", "—"),
-        ("2", "Alertmanager gửi webhook", "—"),
-        ("3", "D-Bot chạy diagnosis sơ bộ", "—"),
-        ("4", "Incident hiển thị summary/evidence", "User mở incident"),
-        ("5", "—", "User hỏi tự nhiên hoặc chọn câu hỏi gợi ý"),
-        ("6", "—", "D-Bot gọi thêm logic/evidence phù hợp"),
-        ("7", "—", "User approve/reject recommendation"),
-        ("8", "D-Bot ghi report resolved/firing", "D-Bot validation sau xử lý")
-    ], [0.5, 3.0, 2.7])
+H("4. Các thành phần", 1)
+H("4.1. Cơ sở dữ liệu và dữ liệu TPC-H", 2)
+p("Cơ sở dữ liệu là PostgreSQL 16, bật extension pg_stat_statements để theo dõi thống kê câu lệnh. Đây cũng là hệ quản trị mà bài báo gốc sử dụng.")
+p("Dữ liệu demo là bộ TPC-H với scale factor 0.1, khoảng 100 MB. TPC-H là bộ benchmark chuẩn cho truy vấn phân tích. Bộ dữ liệu gồm 8 bảng: region, nation, part, supplier, partsupp, customer, orders và lineitem. Bảng lớn nhất là lineitem, khoảng 600 nghìn dòng.")
+p("Dữ liệu không được lưu trong repo mà được sinh khi cài đặt. Container tpch-seed tải và build công cụ dbgen của tpch-kit, chạy lệnh dbgen -s 0.1 để sinh các file .tbl, rồi nạp vào PostgreSQL bằng lệnh COPY và chạy ANALYZE. Các bảng chỉ có khóa chính. Tác giả cố ý không tạo index phụ trên các cột như l_partkey hay o_custkey để kịch bản thiếu index có tác dụng.")
+p("Kịch bản chạy bằng một user riêng tên scenario_runner. User này chỉ có quyền trên schema tpch, và mỗi câu lệnh bị giới hạn 10 phút.")
+H("4.2. Monitor", 2)
+p("Monitor là một vòng lặp Python, cứ 10 giây đọc các view pg_stat_activity, pg_locks (qua hàm pg_blocking_pids), pg_stat_statements và pg_stat_user_tables. Mỗi loại dấu hiệu được so với một ngưỡng đơn giản, trình bày ở Bảng 1.")
+table(["Loại alert", "Điều kiện phát hiện"], [
+    ["long_query", "Phiên đang chạy một câu lệnh quá 5 giây, không phải chờ khóa"],
+    ["lock_wait", "Phiên chờ khóa (wait_event_type là Lock) quá 3 giây"],
+    ["idle_in_transaction", "Transaction mở quá 10 giây mà không làm việc"],
+    ["missing_index", "Một câu SELECT có điều kiện lọc được gọi từ 20 lần trở lên trong một chu kỳ, mỗi lần đọc từ 1000 block trở lên"],
+    ["table_bloat", "Bảng có từ 100 nghìn dòng chết và số dòng chết từ 20% số dòng sống"],
+    ["too_many_connections", "Số kết nối từ 80% max_connections"],
+], "Bảng 1. Các loại alert và điều kiện phát hiện", [4, 11])
+p("Nếu một alert không còn dấu hiệu trong 3 lần quét liên tiếp, monitor tự chuyển alert sang trạng thái đã giải quyết.")
+p("Khi làm demo, tác giả nhận thấy pg_stat_user_tables chỉ cập nhật khi transaction kết thúc. Vì vậy một vòng lặp dài trong khối DO không làm số lần quét bảng thay đổi. Ngược lại, pg_stat_statements cập nhật ngay sau mỗi câu lệnh con. Do đó luật thiếu index dựa trên pg_stat_statements.")
+H("4.3. Backend và giao diện", 2)
+p("Backend viết bằng FastAPI. Backend cung cấp API đọc alert, API chạy, dừng và tải lên kịch bản, API yêu cầu AI phân tích, và một kênh WebSocket để báo cho trình duyệt mỗi khi dữ liệu thay đổi. Alert và báo cáo được lưu trong SQLite.")
+p("Mỗi kịch bản là một file SQL. Khi bấm Chạy, backend mở một kết nối và chạy lần lượt từng câu lệnh trong file. Khi bấm Dừng, backend kết thúc kết nối đó bằng pg_terminate_backend.")
+p("Giao diện là trang HTML dùng Alpine.js. Trang chính có bảng alert với mức độ và trạng thái, nút Nhờ AI phân tích, và khung kịch bản có nút Chạy, Dừng cùng form tải lên. Trang chi tiết hiện tóm tắt, nguyên nhân gốc, các bước suy luận có thể mở ra hoặc thu gọn, và phương án xử lý kèm câu SQL đề xuất.")
+H("4.4. D-Bot worker", 2)
+p("Worker dùng CrewAI với hai agent. Agent Chẩn đoán gọi các công cụ: explain_query, get_locks, get_activity, get_table_stats, get_top_statements và search_knowledge. Agent Báo cáo tổng hợp kết quả thành JSON gồm tóm tắt, các bước suy luận, nguyên nhân gốc và phương án xử lý.")
+p("Kết nối của worker được đặt ở chế độ chỉ đọc. Vì vậy AI không thể tự sửa dữ liệu hay cấu hình. DBA đọc đề xuất và tự quyết định có chạy hay không.")
+p("LLM mặc định là qwen2.5:7b chạy qua Ollama trên máy người dùng, container gọi tới địa chỉ host.docker.internal:11434. Ngoài ra có thể chọn API tương thích OpenAI, hoặc chế độ mock không cần LLM. Chế độ mock vẫn gọi công cụ thật trên cơ sở dữ liệu nhưng kết luận theo luật viết sẵn, dùng để thử luồng hệ thống.")
 
-    doc.add_heading("6. Kết quả đạt được", level=1)
-    bullets(doc, [
-        "Đã tích hợp UI local cho trigger scenario, danh sách incident, incident detail, evidence và chat.",
-        "Đã có Prometheus metrics endpoint và 5 alert rules tương ứng với 5 scenario.",
-        "Đã có Alertmanager webhook nhận alert firing/resolved tại /webhooks/alertmanager.",
-        "Đã có incident store dạng JSON để lưu lịch sử incident và chat trên volume local.",
-        "Đã giữ CrewAI topology gồm Chief DBA, CPU/Workload Agent và Memory/Database Agent.",
-        "Đã giữ mock mode để chạy không cần API key và OpenAI-compatible mode cho LLM thật.",
-        "Đã bổ sung CLI trigger/clear/state và API diagnosis thủ công.",
-        "Kiểm thử source hiện tại: 5 tests passed; Python compile và Compose/rules validation đều đạt."
-    ])
-    add_table(doc, ["Hạng mục kiểm tra", "Kết quả"], [
-        ("Python syntax/compile", "Đạt"),
-        ("Unit tests", "5 passed"),
-        ("Compose YAML parse", "Đạt; đủ postgres, dbot, prometheus, alertmanager"),
-        ("Prometheus rules parse", "Đạt; 5 rules"),
-        ("Mock diagnosis", "Đạt; không cần API key"),
-        ("Docker runtime trên sandbox", "Chưa chạy vì sandbox hiện không có Docker daemon")
-    ], [3.2, 2.8])
+H("5. Các kịch bản sự cố", 1)
+p("Bảng 2 liệt kê các kịch bản có sẵn trong thư mục scenarios. Mỗi file có phần chú thích ở đầu, nêu sự cố, dấu hiệu mong đợi và cách xử lý.")
+table(["Kịch bản", "Mô tả", "Cách xử lý mong đợi"], [
+    ["cpu_high", "Lặp 50 lần truy vấn tổng hợp kiểu TPC-H Q1 trên lineitem", "Hủy query, đặt statement_timeout, dùng bảng tổng hợp"],
+    ["missing_index", "Tìm lineitem theo l_partkey 10000 lần, cột không có index", "Tạo index trên l_partkey"],
+    ["lock_holder", "Cập nhật đơn hàng o_orderkey = 1 rồi chờ 120 giây mới commit", "Tìm và kết thúc phiên giữ khóa"],
+    ["lock_waiter", "Cập nhật cùng đơn hàng, bị chặn", "Đặt lock_timeout"],
+    ["idle_in_transaction", "Mở transaction 90 giây không commit", "Đặt idle_in_transaction_session_timeout"],
+    ["table_bloat", "Tắt autovacuum, cập nhật toàn bảng lineitem 3 lần", "VACUUM và bật lại autovacuum"],
+    ["fix_vacuum", "Dọn dẹp sau table_bloat, không phải sự cố", "Không áp dụng"],
+], "Bảng 2. Các kịch bản sự cố có sẵn", [3.5, 6.5, 5])
 
-    doc.add_heading("7. Hướng dẫn chạy nhanh", level=1)
-    p(doc, "Yêu cầu duy nhất là Docker Desktop hoặc Docker Engine có Compose v2. Không cần cài Python và không cần API key nếu dùng mock mode.")
-    steps = [
-        "Clone repository: git clone https://github.com/nguyenlytruongsonex1-ops/dbot-demo.git",
-        "Vào thư mục: cd dbot-demo",
-        "Tạo cấu hình: cp .env.example .env",
-        "Khởi động: docker compose up --build -d",
-        "Mở UI: http://localhost:8000",
-        "Bấm lock_contention hoặc slow_query trong phần Trigger demo workload",
-        "Chờ 10–20 giây để Prometheus và Alertmanager gửi incident",
-        "Chọn incident và hỏi trong chat: ‘Session nào đang block?’ hoặc ‘Có chắc do thiếu index không?’",
-        "Dọn demo: bấm Clear all scenarios hoặc chạy docker compose down"
-    ]
-    for i, step in enumerate(steps, 1):
-        para = doc.add_paragraph(style="List Number")
-        para.add_run(step)
-    p(doc, "Nếu muốn reset hoàn toàn database và metrics: docker compose down -v rồi chạy lại docker compose up --build -d.")
+H("6. Luồng xử lý từ alert đến báo cáo", 1)
+p("Luồng xử lý gồm các bước sau.")
+for i, t in enumerate([
+    "DBA bấm Chạy một kịch bản. Backend chạy file SQL trên một kết nối riêng.",
+    "Monitor quét các view thống kê. Khi vượt ngưỡng, monitor ghi một alert vào SQLite.",
+    "Backend thấy dữ liệu thay đổi và gửi thông báo qua WebSocket. Trình duyệt tải lại danh sách alert.",
+    "DBA bấm Nhờ AI phân tích. Alert chuyển sang trạng thái đang phân tích.",
+    "Worker nhận alert, gọi công cụ để lấy thêm dữ liệu, tra tri thức, rồi viết báo cáo JSON.",
+    "DBA mở trang chi tiết để đọc từng bước suy luận và phương án xử lý.",
+    "Khi sự cố hết, sau 3 lần quét không còn dấu hiệu, alert tự chuyển sang đã giải quyết.",
+], 1):
+    p(f"Bước {i}. {t}", WD_ALIGN_PARAGRAPH.LEFT)
 
-    doc.add_heading("8. Giới hạn và hướng phát triển", level=1)
-    p(doc, "Bản Light là proof-of-concept. Một số tín hiệu scenario được điều khiển qua trạng thái demo để bảo đảm alert có thể tái lập trên laptop; diagnosis vẫn đọc database tools để tạo evidence. Vì vậy đây chưa phải benchmark production hay hệ thống DBA tự động hoàn toàn.")
-    add_table(doc, ["Hiện tại", "Hướng phát triển"], [
-        ("Experience seed dạng JSON", "Ingest Markdown/PDF, chunking và extraction tự động"),
-        ("Retrieval nhẹ theo token", "BM25/embedding retrieval có reference"),
-        ("State flow bounded", "Tree search/backtracking sâu hơn"),
-        ("Khuyến nghị chưa auto-apply", "Approval workflow có audit và validation"),
-        ("Một database demo", "Adapter PostgreSQL/MySQL và nhiều database target")
-    ], [3.1, 3.1])
+H("7. Hướng dẫn chạy", 1)
+p("Máy cần có Docker và Ollama. Các bước chạy như sau.")
+for t in [
+    "Tải model: ollama pull qwen2.5:7b. Trên Linux cần cho Ollama nghe ở địa chỉ 0.0.0.0.",
+    "Tải mã nguồn: git clone -b feature/dbot-demo " + REPO.split("/tree")[0] + ".git",
+    "Vào thư mục dbot-demo, sao chép file .env.example thành .env.",
+    "Chạy docker compose up --build -d. Lần đầu mất vài phút để build và sinh dữ liệu TPC-H.",
+    "Mở trình duyệt tại địa chỉ http://localhost:8000.",
+]:
+    bullet(t)
+p("File README trong repo có hướng dẫn chi tiết hơn, gồm cách thêm kịch bản và cách xử lý lỗi thường gặp.")
 
-    doc.add_heading("9. Kết luận", level=1)
-    p(doc, "Bản tái dựng đã đạt mục tiêu tạo một D-Bot Light dễ chạy, có cả realtime alert flow và user chat flow. Kiến trúc giữ được thông điệp cốt lõi của D-Bot: LLM không chỉ nhìn triệu chứng mà phải kết hợp maintenance experience, metrics, system views, query plan và tool evidence.")
-    p(doc, "Phiên bản hiện tại phù hợp cho demo, học tập và phát triển tiếp. Để tiến gần repo gốc hơn, ưu tiên tiếp theo là document-to-knowledge pipeline, dynamic tool selection, diagnosis trace/backtracking và approval workflow đầy đủ.")
+H("8. Kết quả kiểm thử", 1)
+p("Máy kiểm thử không có Docker và không có Ollama. Vì vậy tác giả kiểm thử theo cách sau: chạy PostgreSQL 17 cài trực tiếp trên máy, sinh dữ liệu bằng chính script seed.sh, chạy monitor, backend và worker bằng Python, và dùng chế độ mock cho phần AI. Bảng 3 ghi lại kết quả quan sát được.")
+table(["Nội dung", "Kết quả quan sát"], [
+    ["Sinh và nạp TPC-H SF 0.1", "dbgen chạy khoảng 5 giây. Toàn bộ sinh và nạp mất khoảng 8 giây. Bảng lineitem có 600.572 dòng"],
+    ["missing_index", "Alert xuất hiện khoảng 17 giây sau khi chạy. Câu SELECT trên lineitem được gọi 225 lần trong một chu kỳ"],
+    ["cpu_high", "Alert long_query xuất hiện sau khoảng 7 giây, trạng thái chờ là CPU, mức critical khi quá 30 giây"],
+    ["lock_holder và lock_waiter", "Alert lock_wait xuất hiện sau khoảng 5 giây, chỉ đúng pid của phiên chặn"],
+    ["idle_in_transaction", "Alert xuất hiện sau khoảng 15 giây"],
+    ["table_bloat", "Alert xuất hiện sau khoảng 7 giây, với khoảng 1,8 triệu dòng chết"],
+    ["Tự giải quyết", "Sau khi bấm Dừng, các alert chuyển sang đã giải quyết sau 30 đến 40 giây. Alert bloat hết sau khi chạy fix_vacuum"],
+    ["Phân tích ở chế độ mock", "Worker gọi công cụ thật, mỗi alert xong trong vài giây. Ví dụ với missing_index, kết luận là cột l_partkey không có index và đề xuất CREATE INDEX CONCURRENTLY"],
+    ["Tải lên kịch bản", "File hợp lệ được lưu và chạy được. Tên kịch bản sai quy tắc bị từ chối"],
+    ["WebSocket và trang web", "Trang chính trả về đúng HTML. Kênh WebSocket gửi thông báo thay đổi"],
+], "Bảng 3. Kết quả kiểm thử thực tế", [4.5, 10.5])
+p("Các phần chưa được kiểm thử:")
+bullet("Chưa chạy docker compose, các Dockerfile và container tpch-seed, vì máy kiểm thử không có Docker.")
+bullet("Chưa chạy với LLM thật. CrewAI phiên bản 1.15 đã được cài và gọi thử, nhưng báo lỗi kết nối vì máy không có Ollama. Chất lượng báo cáo của qwen2.5:7b chưa được đánh giá.")
+bullet("Chưa thử thao tác bấm nút trong trình duyệt thật. Các API phía sau nút đã được gọi trực tiếp và hoạt động.")
+bullet("Kiểm thử dùng PostgreSQL 17 thay vì 16 như trong Docker.")
 
-    doc.add_heading("Tài liệu tham khảo", level=1)
-    refs = [
-        "Zhou, X., Li, G., Liu, Z. LLM As DBA. arXiv:2308.05481v2.",
-        "TsinghuaDatabaseGroup/DB-GPT: https://github.com/TsinghuaDatabaseGroup/DB-GPT",
-        "Prometheus Alertmanager configuration: https://prometheus.io/docs/alerting/latest/configuration/",
-        "CrewAI documentation: https://docs.crewai.com/"
-    ]
-    for ref in refs:
-        para = doc.add_paragraph(style="List Bullet")
-        para.add_run(ref)
+H("9. Hạn chế", 1)
+bullet("Luật phát hiện còn đơn giản, dựa trên ngưỡng cố định. Một số trường hợp có thể bị báo trùng, ví dụ kịch bản giữ khóa cũng tạo alert transaction mở lâu.")
+bullet("Monitor không đo trực tiếp CPU của máy. Alert CPU được suy ra từ việc phiên đang chạy mà không chờ gì.")
+bullet("Tri thức chẩn đoán ít và tìm theo từ khóa, chưa dùng tìm kiếm ngữ nghĩa.")
+bullet("Mô hình 7B chạy trên CPU khá chậm, có thể trả JSON sai định dạng. Khi đó hệ thống hiện văn bản gốc và nhật ký công cụ.")
+bullet("Bản demo không có suy luận theo cây và không có nhiều agent chuyên môn như bài báo gốc.")
 
-    doc.save(OUT)
-    print(OUT)
+H("10. Kết luận", 1)
+p("Bản demo đã dựng lại được luồng chính của D-Bot ở mức nhẹ: gây sự cố thật trên dữ liệu TPC-H, phát hiện bất thường, đẩy alert lên giao diện theo thời gian thực, và cho AI phân tích theo từng bước. Toàn bộ chạy trên máy cá nhân, không cần GPU hay API trả phí. Hướng mở rộng gồm thêm kịch bản, thêm công cụ như gợi ý index bằng hypopg, và so sánh chất lượng báo cáo giữa các mô hình.")
 
-if __name__ == "__main__":
-    main()
+H("Tài liệu tham khảo", 1)
+for r in [
+    "[1] X. Zhou, G. Li, Z. Sun và cộng sự, D-Bot: Database Diagnosis System using Large Language Models, arXiv:2312.01454, 2023.",
+    "[2] TsinghuaDatabaseGroup, DB-GPT, https://github.com/TsinghuaDatabaseGroup/DB-GPT.",
+    "[3] Transaction Processing Performance Council, TPC-H Benchmark, https://www.tpc.org/tpch/.",
+    "[4] G. Rahn, tpch-kit, https://github.com/gregrahn/tpch-kit.",
+    "[5] PostgreSQL Global Development Group, The Statistics Collector và pg_stat_statements, tài liệu PostgreSQL 16.",
+    "[6] CrewAI, https://docs.crewai.com.",
+]:
+    p(r, WD_ALIGN_PARAGRAPH.LEFT)
+
+doc.save(os.path.join(HERE, "bao-cao-dbot-demo.docx"))
+print("saved")
